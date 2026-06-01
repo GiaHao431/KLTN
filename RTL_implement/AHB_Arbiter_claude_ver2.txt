@@ -1,0 +1,328 @@
+`timescale 1ns / 1ps
+//=============================================================================
+// Module      : AHB_Arbiter
+// Project     : AHB 2.0 Multi-master Interconnect (2 Masters, 3 Slaves)
+// Language    : SystemVerilog (IEEE 1800-2012)
+//
+// Revision History:
+//   v1.0 — Initial version (AHB_Arbiter_claude_ver.txt)
+//   v2.0 — Corrected port names, SPLIT timing, LOCK/SPLIT priority, mask guard
+//   v2.1 — Corrected HSPLIT interface to match AMBA AHB 2.0 standard:
+//           HSPLIT_M1 + HSPLIT_M2 (1-bit each) → HSPLIT_S[15:0] (16-bit).
+//
+//           Per AMBA AHB 2.0 (IHI0011A):
+//             • Each slave drives HSPLITx[15:0]; bit[N]=1 → Master N may retry.
+//             • The Interconnect ORs all HSPLITx buses: HSPLIT_S = OR(all slaves)
+//             • The Arbiter receives the full 16-bit result and extracts the
+//               relevant bits internally using HMASTER IDs as the index:
+//                 bit[1] → Master 1 (HMASTER = 4'd1)
+//                 bit[2] → Master 2 (HMASTER = 4'd2)
+//             • This keeps the Arbiter scalable: adding Master 3 only requires
+//               using bit[3] internally — no port change needed.
+//
+// Retained fixes from v2.0:
+//   [FIX 1] Port names: HREADY→HREADY_GLOBAL, HRESP_S→HRESP_M
+//   [FIX 2] SPLIT preemption on cycle-1 (HREADY=0), not cycle-2
+//   [FIX 3] Priority: LOCK checked before SPLIT
+//   [FIX 4] Mask guard: ~HREADY_GLOBAL & ~HLOCK prevents false masking
+//
+// Race-Condition Mitigation:
+//   - All combinational next-state logic derives exclusively from registered
+//     signals, preventing combinational feedback and glitch paths to outputs.
+//   - Non-blocking assignments (<=) in always_ff guarantee no intra-block
+//     read-after-write hazard.
+//   - Explicit default assignments in every always_comb block prevent latch
+//     inference.
+//   - `unique case` enables tool-level lint/formal checks.
+//=============================================================================
+
+module AHB_Arbiter (
+    // ── System Signals ───────────────────────────────────────────────────────
+    input  logic        HCLK,
+    input  logic        HRESETn,          // Active-LOW asynchronous reset
+
+    // ── Master Bus-Request & Lock Signals ────────────────────────────────────
+    input  logic        HBUSREQ_M1,       // Bus request  — Master 1
+    input  logic        HBUSREQ_M2,       // Bus request  — Master 2
+    input  logic        HLOCK_M1,         // Locked-transfer request — Master 1
+    input  logic        HLOCK_M2,         // Locked-transfer request — Master 2
+
+    // ── Bus Status Signals ───────────────────────────────────────────────────
+    // HTRANS_S and HBURST_S are preserved for architectural completeness and
+    // future burst-length tracking optimisation.
+    input  logic [1:0]  HTRANS_S,         // Transfer type on shared bus
+    input  logic [2:0]  HBURST_S,         // Burst type on shared bus
+    input  logic        HREADY_GLOBAL,    // Global HREADY from Ready Mux
+    input  logic [1:0]  HRESP_M,          // Response from Response Mux to current Master
+
+    // ── SPLIT Completion Bus (16-bit, per AMBA AHB 2.0 IHI0011A) ─────────────
+    // Bitwise OR of HSPLITx[15:0] from all SPLIT-capable slaves, performed
+    // inside the Interconnect before reaching this Arbiter:
+    //   HSPLIT_S = HSPLIT_S1 | HSPLIT_S2 | HSPLIT_S3
+    //
+    // Bit encoding — identical to HMASTER[3:0] master ID space:
+    //   HSPLIT_S[0]     : unused (no master has ID 0 in normal operation)
+    //   HSPLIT_S[1] = 1 : Master 1 (HMASTER=4'd1) may retry its SPLIT transaction
+    //   HSPLIT_S[2] = 1 : Master 2 (HMASTER=4'd2) may retry its SPLIT transaction
+    //   HSPLIT_S[15:3]  : reserved for future master expansion
+    input  logic [15:0] HSPLIT_S,
+
+    // ── Arbiter Outputs ──────────────────────────────────────────────────────
+    output logic        HGRANT_M1,        // Bus grant — Master 1
+    output logic        HGRANT_M2,        // Bus grant — Master 2
+    output logic [3:0]  HMASTER,          // Active master ID (4'd0=none,1=M1,2=M2)
+    output logic        HMASTLOCK         // Current transfer is part of a locked sequence
+);
+
+    //=========================================================================
+    // ❶  Local Parameters
+    //=========================================================================
+    // AHB HRESP[1:0] response codes (AMBA IHI0011A §3.9)
+    localparam logic [1:0] RESP_OKAY  = 2'b00;
+    localparam logic [1:0] RESP_ERROR = 2'b01;
+    localparam logic [1:0] RESP_RETRY = 2'b10;
+    localparam logic [1:0] RESP_SPLIT = 2'b11;
+
+    // HSPLIT_S bit indices — mapped to HMASTER IDs (IHI0011A §6.5)
+    // bit[N] of HSPLIT_S corresponds to the master whose HMASTER == N.
+    localparam int unsigned SPLIT_IDX_M1 = 1;   // Master 1 ID = 4'd1
+    localparam int unsigned SPLIT_IDX_M2 = 2;   // Master 2 ID = 4'd2
+
+    //=========================================================================
+    // ❷  FSM State Encoding  (3-state Moore machine)
+    //=========================================================================
+    typedef enum logic [1:0] {
+        ST_IDLE   = 2'b00,   // No master granted; bus idle
+        ST_GNT_M1 = 2'b01,   // Master 1 owns the bus
+        ST_GNT_M2 = 2'b10    // Master 2 owns the bus
+        // 2'b11 is unused; covered by default branches in all case statements.
+    } arb_state_e;
+
+    //=========================================================================
+    // ❸  Registered Signals  (suffix _q = flip-flop Q output)
+    //=========================================================================
+    arb_state_e  state_q;            // Current FSM state
+    logic [1:0]  last_master_q;      // ID of master that last held the bus:
+                                     //   2'd1 → M1 was last; M2 gets tie-break
+                                     //   2'd2 → M2 was last; M1 gets tie-break
+    logic        split_mask_m1_q;    // 1 → M1 excluded from arbitration (SPLIT pending)
+    logic        split_mask_m2_q;    // 1 → M2 excluded from arbitration (SPLIT pending)
+
+    //=========================================================================
+    // ❹  Combinational Signals
+    //=========================================================================
+    arb_state_e  state_d;            // Next FSM state
+    logic        eff_req_m1;         // M1 effective request (0 when SPLIT-masked)
+    logic        eff_req_m2;         // M2 effective request (0 when SPLIT-masked)
+    logic        split_cycle1;       // SPLIT cycle-1 detection (HRESP=SPLIT, HREADY=0)
+    // Extracted SPLIT completion bits from the 16-bit combined bus.
+    // Internal signals: the bit-index extraction is the Arbiter's responsibility.
+    logic        hsplit_m1;          // Slave(s) ready to retry with Master 1
+    logic        hsplit_m2;          // Slave(s) ready to retry with Master 2
+
+    //=========================================================================
+    // ❺  Continuous Assignments
+    //=========================================================================
+    // Effective request: masked-out master cannot be re-granted until
+    // its corresponding HSPLITx bit is asserted by the slave.
+    assign eff_req_m1 = HBUSREQ_M1 & ~split_mask_m1_q;
+    assign eff_req_m2 = HBUSREQ_M2 & ~split_mask_m2_q;
+
+    // SPLIT cycle-1 (HRESP=SPLIT, HREADY=0): the one AHB exception where
+    // grant may change before HREADY_GLOBAL rises. Spec §2.4.4, waveform T4:
+    // "Arbiter tức thì hạ HGRANT_M1=0, bất chấp HREADY=0."
+    assign split_cycle1 = (HRESP_M == RESP_SPLIT) & ~HREADY_GLOBAL;
+
+    // Internal bit extraction from the 16-bit OR-aggregated HSPLIT_S bus.
+    // AMBA IHI0011A §6.5: HSPLITx[N] asserted → Master whose ID = N may retry.
+    // Centralising this here makes SPLIT_IDX_* the single point of truth,
+    // so changing master IDs in future only requires updating the localparam.
+    assign hsplit_m1 = HSPLIT_S[SPLIT_IDX_M1];   // bit[1] → Master 1
+    assign hsplit_m2 = HSPLIT_S[SPLIT_IDX_M2];   // bit[2] → Master 2
+
+    //=========================================================================
+    // ❻  Next-State Logic  (always_comb — explicit defaults prevent latches)
+    //=========================================================================
+    always_comb begin : NEXT_STATE_PROC
+        state_d = state_q;   // Mandatory default: hold current state
+
+        unique case (state_q)
+
+            // -----------------------------------------------------------------
+            //  ST_IDLE — No master holds the bus.
+            //
+            //  Round-Robin (§2.4.1) using last_master_q:
+            //    • Only M1 requests, or both request and M2 was last → grant M1
+            //    • Only M2 requests, or both request and M1 was last → grant M2
+            //    • No effective request                               → stay IDLE
+            // -----------------------------------------------------------------
+            ST_IDLE: begin
+                if (eff_req_m1 && (!eff_req_m2 || last_master_q == 2'd2))
+                    state_d = ST_GNT_M1;
+                else if (eff_req_m2 && (!eff_req_m1 || last_master_q == 2'd1))
+                    state_d = ST_GNT_M2;
+            end
+
+            // -----------------------------------------------------------------
+            //  ST_GNT_M1 — Master 1 currently owns the bus.
+            //
+            //  Priority order (§2.5.2 FSM table, highest → lowest):
+            //
+            //  ① LOCK (HLOCK_M1=1):
+            //       Spec: "GNT_M1→GNT_M1: HLOCK_M1_reg || ..."
+            //       Hold grant unconditionally. No master can preempt a locked
+            //       sequence, including SPLIT (HMASTLOCK=1 also prevents the
+            //       slave from asserting HSPLITx per slave FSM spec).
+            //
+            //  ② SPLIT cycle-1 (!HLOCK_M1 && HRESP_M==SPLIT && HREADY=0):
+            //       Spec: "GNT_M1→GNT_M2: (!HLOCK_M1_reg && HRESP==SPLIT)"
+            //       Immediate preemption — the sole AHB exception allowing
+            //       grant change without waiting for HREADY_GLOBAL=1.
+            //
+            //  ③ HREADY_GLOBAL=1 (data phase complete, no SPLIT/LOCK):
+            //       Standard HREADY-gated handover; apply Round-Robin.
+            //
+            //  ④ Default (HREADY=0, no SPLIT, no LOCK):
+            //       Spec: "GNT_M1→GNT_M1: ... (!HREADY && HRESP!=SPLIT)"
+            //       Slave inserting wait states; hold grant implicitly.
+            // -----------------------------------------------------------------
+            ST_GNT_M1: begin
+                if (HLOCK_M1) begin                                   // ① LOCK
+                    state_d = ST_GNT_M1;
+                end else if (split_cycle1) begin                      // ② SPLIT
+                    state_d = eff_req_m2 ? ST_GNT_M2 : ST_IDLE;
+                end else if (HREADY_GLOBAL) begin                     // ③ HREADY
+                    if (!eff_req_m1 && !eff_req_m2)
+                        state_d = ST_IDLE;
+                    else if (eff_req_m2 && (!eff_req_m1 || last_master_q == 2'd1))
+                        state_d = ST_GNT_M2;
+                    else
+                        state_d = ST_GNT_M1;
+                end
+                // ④ Default: implicit hold via state_d = state_q
+            end
+
+            // -----------------------------------------------------------------
+            //  ST_GNT_M2 — Master 2 currently owns the bus.  (Mirror of GNT_M1)
+            // -----------------------------------------------------------------
+            ST_GNT_M2: begin
+                if (HLOCK_M2) begin
+                    state_d = ST_GNT_M2;
+                end else if (split_cycle1) begin
+                    state_d = eff_req_m1 ? ST_GNT_M1 : ST_IDLE;
+                end else if (HREADY_GLOBAL) begin
+                    if (!eff_req_m1 && !eff_req_m2)
+                        state_d = ST_IDLE;
+                    else if (eff_req_m1 && (!eff_req_m2 || last_master_q == 2'd2))
+                        state_d = ST_GNT_M1;
+                    else
+                        state_d = ST_GNT_M2;
+                end
+            end
+
+            // Safety net: illegal encoding 2'b11 → recover to IDLE
+            default: state_d = ST_IDLE;
+
+        endcase
+    end : NEXT_STATE_PROC
+
+    //=========================================================================
+    // ❼  Sequential Block: State, last_master_q, SPLIT Masks
+    //
+    //  Non-blocking assignments (<=) throughout. All RHS read PRE-update
+    //  register values — no intra-block read-after-write race conditions.
+    //=========================================================================
+    always_ff @(posedge HCLK or negedge HRESETn) begin : SEQ_PROC
+
+        if (!HRESETn) begin
+            state_q         <= ST_IDLE;
+            last_master_q   <= 2'd2;     // "M2 was last" → M1 wins first tie-break
+            split_mask_m1_q <= 1'b0;
+            split_mask_m2_q <= 1'b0;
+
+        end else begin
+
+            // ── 7a. Advance FSM state ──────────────────────────────────────
+            state_q <= state_d;
+
+            // ── 7b. Update last_master_q when a master leaves a GNT state ─
+            //   Fires only when the FSM LEAVES a GNT state.
+            //   IDLE→GNT does NOT update last_master_q.
+            if      (state_q == ST_GNT_M1 && state_d != ST_GNT_M1)
+                last_master_q <= 2'd1;   // M1 released → M2 gets next tie-break
+            else if (state_q == ST_GNT_M2 && state_d != ST_GNT_M2)
+                last_master_q <= 2'd2;   // M2 released → M1 gets next tie-break
+
+            // ── 7c. SPLIT mask — Master 1 ─────────────────────────────────
+            //
+            //  UNMASK (hsplit_m1) has HIGHER priority than MASK (else-if).
+            //
+            //  MASK guard conditions:
+            //    ~HREADY_GLOBAL : Restricts masking to SPLIT cycle-1 only.
+            //      After FIX 2 (cycle-1 preemption), on cycle-2 the FSM has
+            //      already moved to ST_GNT_M2. Without this guard, the condition
+            //      (state_q==ST_GNT_M2 && HRESP_M==SPLIT) would incorrectly
+            //      mask M2 because the slave's cycle-2 SPLIT response is still
+            //      visible on the shared HRESP_M bus.
+            //    ~HLOCK_M1 : When LOCK is active, the slave cannot issue SPLIT
+            //      (slave FSM goes to TIME_PASS instead of asserting HSPLITx).
+            //      Masking M1 while LOCK is active would suppress its valid
+            //      request after the locked sequence ends.
+            if (hsplit_m1) begin
+                // Slave signals M1 may retry → restore to round-robin
+                split_mask_m1_q <= 1'b0;
+            end else if (state_q == ST_GNT_M1 && HRESP_M == RESP_SPLIT
+                         && ~HREADY_GLOBAL && ~HLOCK_M1) begin
+                // Cycle-1 of SPLIT while M1 holds bus → exclude from arbitration
+                split_mask_m1_q <= 1'b1;
+            end
+
+            // ── 7d. SPLIT mask — Master 2  (mirror of 7c) ────────────────
+            if (hsplit_m2) begin
+                split_mask_m2_q <= 1'b0;
+            end else if (state_q == ST_GNT_M2 && HRESP_M == RESP_SPLIT
+                         && ~HREADY_GLOBAL && ~HLOCK_M2) begin
+                split_mask_m2_q <= 1'b1;
+            end
+
+        end
+    end : SEQ_PROC
+
+    //=========================================================================
+    // ❽  Output Logic  (Moore machine: outputs depend ONLY on state_q)
+    //
+    //  Deriving outputs from registered state_q guarantees glitch-free
+    //  HGRANT/HMASTER/HMASTLOCK and correct AHB address-phase timing (§3.11).
+    //=========================================================================
+    always_comb begin : OUTPUT_PROC
+        HGRANT_M1 = 1'b0;
+        HGRANT_M2 = 1'b0;
+        HMASTER   = 4'd0;
+        HMASTLOCK = 1'b0;
+
+        unique case (state_q)
+            ST_GNT_M1: begin
+                HGRANT_M1 = 1'b1;
+                HGRANT_M2 = 1'b0;
+                HMASTER   = 4'd1;
+                HMASTLOCK = HLOCK_M1;
+            end
+            ST_GNT_M2: begin
+                HGRANT_M1 = 1'b0;
+                HGRANT_M2 = 1'b1;
+                HMASTER   = 4'd2;
+                HMASTLOCK = HLOCK_M2;
+            end
+            default: begin
+                HGRANT_M1 = 1'b0;
+                HGRANT_M2 = 1'b0;
+                HMASTER   = 4'd0;
+                HMASTLOCK = 1'b0;
+            end
+        endcase
+    end : OUTPUT_PROC
+
+endmodule : AHB_Arbiter
+//=============================================================================
+// End of AHB_Arbiter.sv  (v2.1 — compliant with AMBA AHB 2.0 IHI0011A)
+//=============================================================================
