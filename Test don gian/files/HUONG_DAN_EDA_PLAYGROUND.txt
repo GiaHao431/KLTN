@@ -1,0 +1,190 @@
+================================================================
+  HƯỚNG DẪN CHẠY SIMULATION TRÊN EDA PLAYGROUND
+  AHB Slave — Layer 1 Unit Test
+================================================================
+
+URL: https://www.edaplayground.com
+(Tạo tài khoản miễn phí nếu chưa có — chỉ cần email)
+
+----------------------------------------------------------------
+BƯỚC 1 — Cấu hình Simulator
+----------------------------------------------------------------
+
+Sau khi đăng nhập, nhìn vào cột bên TRÁI, mục "Testbench + Design":
+
+  [1a] Phần "Tools & Simulators" (góc trên trái):
+       → Chọn: "Cadence Xcelium" (khuyến nghị cho SystemVerilog)
+         HOẶC: "Synopsys VCS"
+         HOẶC: "Aldec Riviera-PRO"
+
+       ⚠ TRÁNH dùng "Icarus Verilog (iverilog)" vì không hỗ trợ
+         đầy đủ SystemVerilog (automatic tasks, $sformatf, v.v.)
+
+  [1b] Cạnh ô simulator, tick vào:
+       ☑ "Open EPWave after run"   ← để xem waveform tự động
+
+  [1c] Trong ô "Compile options" (nếu có):
+       Thêm vào: -sv   (bật chế độ SystemVerilog)
+       Với Xcelium: -sv -access +rwc
+       Với VCS    : -sv -debug_all
+
+----------------------------------------------------------------
+BƯỚC 2 — Nhập source code
+----------------------------------------------------------------
+
+Trên EDA Playground có 2 ô soạn thảo:
+  • Ô trên  : "Testbench"   (tb_top)
+  • Ô dưới  : "Design"      (design files)
+
+Vì ta dùng bundle file 1 file duy nhất, làm như sau:
+
+  [2a] Click vào ô "Design" (ô dưới)
+       → XÓA toàn bộ nội dung có sẵn
+       → PASTE toàn bộ nội dung file "eda_playground_bundle.sv"
+
+  [2b] Click vào ô "Testbench" (ô trên)
+       → XÓA toàn bộ nội dung
+       → Để TRỐNG hoặc chỉ gõ:
+
+           // Testbench is included in Design file
+           // Top module: tb_ahb_slave
+
+  [2c] Trong phần "Top entity" hoặc "Top module":
+       → Gõ: tb_ahb_slave
+
+----------------------------------------------------------------
+BƯỚC 3 — Chạy simulation
+----------------------------------------------------------------
+
+  [3a] Nhấn nút "Run" (màu xanh lá, góc trên)
+
+  [3b] Chờ khoảng 10–30 giây
+
+  [3c] Kết quả hiện ra trong ô "Log" phía dưới màn hình
+
+Kết quả PASS trông như thế này:
+  ═══════════════════════════════════════════════════════════
+    AHB_Slave Unit Testbench — Layer 1
+  ═══════════════════════════════════════════════════════════
+  [PASS] TC1 Write OKAY response          addr=0x04 data=0xDEADBEEF
+  [PASS] TC2 Read OKAY response           addr=0x04
+  [PASS] TC2 Data integrity 0xDEADBEEF   Got=0xDEADBEEF
+  [PASS] TC3 INCR4 Write all beats OKAY  4 beats addr=0x10-0x1C
+  [PASS] TC4 INCR4 Read all beats OKAY   4 beats addr=0x10-0x1C
+  [PASS] TC4 Beat[0]=0xAAAA0001          Got=0xAAAA0001
+  [PASS] TC4 Beat[1]=0xBBBB0002          Got=0xBBBB0002
+  [PASS] TC4 Beat[2]=0xCCCC0003          Got=0xCCCC0003
+  [PASS] TC4 Beat[3]=0xDDDD0004          Got=0xDDDD0004
+  [PASS] TC5 HRESP=SPLIT detected        HRESP=0b11 (SPLIT=11 expected)
+  [PASS] TC5 HSPLITx[1] asserted         Slave must release master
+  [PASS] TC6 Read OKAY                   addr=0x08 (word index 2)
+  [PASS] TC6 Seed value = 32'd30         Got=30
+  [PASS] TC7 Read OKAY                   addr=0x04
+  [PASS] TC7 Data still = 0xDEADBEEF    Got=0xDEADBEEF
+  ───────────────────────────────────────────────────────────
+  PASS  : 15
+  FAIL  : 0
+  TOTAL : 15
+  RESULT: *** ALL TESTS PASSED ✓ ***
+
+----------------------------------------------------------------
+BƯỚC 4 — Xem Waveform (EPWave)
+----------------------------------------------------------------
+
+Sau khi Run xong, tab "EPWave" sẽ mở tự động.
+
+Các signal quan trọng cần quan sát:
+
+  Nhóm 1 — Bus Control:
+    tb_ahb_slave.HCLK
+    tb_ahb_slave.HRESETn
+    tb_ahb_slave.HSELx
+    tb_ahb_slave.HADDR[31:0]
+    tb_ahb_slave.HTRANS[1:0]
+    tb_ahb_slave.HWRITE
+
+  Nhóm 2 — Data:
+    tb_ahb_slave.HWDATA[31:0]
+    tb_ahb_slave.HRDATA[31:0]
+
+  Nhóm 3 — Response:
+    tb_ahb_slave.HREADYOUT
+    tb_ahb_slave.HRESP[1:0]
+
+  Nhóm 4 — SPLIT:
+    tb_ahb_slave.HSPLITx[15:0]
+
+  Nhóm 5 — DUT Internal (debug):
+    tb_ahb_slave.u_dut.ps_slave[2:0]
+    tb_ahb_slave.u_dut.beat_cnt[5:0]
+    tb_ahb_slave.u_dut.local_addr[7:0]
+
+Cách thêm signal vào waveform trong EPWave:
+  → Click "+" ở panel bên trái
+  → Tìm và chọn signal muốn xem
+  → Kéo thả hoặc double-click để thêm vào viewer
+
+Để kiểm tra TC1 (Single Write):
+  → Zoom vào vùng 50ns – 150ns
+  → Quan sát: HTRANS = 10 (NONSEQ) → IDLE
+               HWRITE = 1
+               HREADYOUT: xuống 0 (wait state ACTIVE), lên 1 (WBURST)
+
+Để kiểm tra TC5 (SPLIT):
+  → Zoom vào vùng sau ~400ns
+  → Quan sát: HRESP = 11 (SPLIT) kéo dài 2 chu kỳ
+               HREADYOUT = 0 ở chu kỳ 1, = 1 ở chu kỳ 2
+               HSPLITx[1] = 1 trong 1 chu kỳ sau đó
+
+----------------------------------------------------------------
+BƯỚC 5 — Xử lý lỗi thường gặp
+----------------------------------------------------------------
+
+LỖI: "top module not found"
+  → Kiểm tra ô "Top module" đã điền "tb_ahb_slave"
+  → Đảm bảo không có lỗi compile trước đó
+
+LỖI: "automatic tasks not supported"
+  → Bạn đang dùng Icarus Verilog → đổi sang Xcelium hoặc VCS
+
+LỖI: "$sformatf not supported"
+  → Tương tự trên → đổi sang Xcelium
+
+LỖI: "fork...join compilation error"
+  → Thêm -sv vào compile options
+
+LỖI: "timescale redefinition"
+  → Xóa dòng `timescale trùng lặp (chỉ giữ 1 ở đầu file)
+
+LỖI: TC5 FAIL — HSPLITx không assert
+  → Kiểm tra HMASTER_ID có đang = 4'd1 không
+  → HSPLITx[split_master_reg] = HSPLITx[1] — đúng
+
+----------------------------------------------------------------
+BƯỚC 6 — Lưu project (tùy chọn)
+----------------------------------------------------------------
+
+  → Nhấn "Save" ở thanh menu
+  → Đặt tên ví dụ: "AHB_Slave_Layer1_UnitTest"
+  → EDA Playground lưu online, có thể share link cho người khác
+
+================================================================
+  CẤU TRÚC FILE ĐÃ ĐƯỢC ĐÓNG GÓI (eda_playground_bundle.sv)
+================================================================
+
+  Section 1: ahb_master_bfm     — BFM với 6 tasks
+  Section 2: AHB_Slave          — DUT (copy từ thiết kế của bạn)
+  Section 3: tb_ahb_slave       — Testbench với 7 test cases
+
+  Test Cases:
+    TC1 — Single Write normal address     (verify pipeline W)
+    TC2 — Single Read + data integrity    (verify pipeline R)
+    TC3 — INCR4 Write Burst               (verify burst W)
+    TC4 — INCR4 Read Burst                (verify burst R + data)
+    TC5 — SPLIT trigger at addr=0x0       (verify SPLIT protocol)
+    TC6 — Read pre-init seed value        (verify memory init)
+    TC7 — SRAM persistence                (verify write retention)
+
+  Total checks: 15 assertions
+
+================================================================

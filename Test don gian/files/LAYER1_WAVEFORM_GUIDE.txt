@@ -1,0 +1,240 @@
+================================================================
+  LAYER 1 — PHÂN TÍCH CHI TIẾT TỪNG TEST CASE
+  Tài liệu tham chiếu khi xem waveform trên EPWave
+================================================================
+
+Ký hiệu dùng trong các giản đồ dưới:
+  ↑ = cạnh lên HCLK (posedge)
+  P = Address Phase
+  D = Data Phase
+  —X— = don't care / không quan trọng
+
+----------------------------------------------------------------
+TC1 — Single Write  (HADDR=0x04, HWDATA=0xDEADBEEF)
+----------------------------------------------------------------
+
+Kỳ vọng waveform (mỗi cột = 1 chu kỳ 10ns):
+
+         T1    T2    T3    T4
+HCLK    ↑     ↑     ↑     ↑
+HSELx   0→1   1     0     0
+HADDR   x→04  04    0     0
+HTRANS  00→10 10→00 00    00
+HWRITE  0→1   1→0   0     0
+HWDATA  x     →DEAD x     x
+HREADYOUT 1   0     1     1    ← T2=0: ST_ACTIVE wait state
+HRESP   00    00    00    00
+ps_slave IDLE ACTIV WBURS IDLE  ← FSM transitions
+
+Giải thích từng bước:
+  T1 (Address Phase):
+    BFM phát HSELx=1, HADDR=0x04, HTRANS=NONSEQ, HWRITE=1
+    Slave đang ở ST_IDLE, nhận diện NONSEQ → chuyển ST_ACTIVE
+
+  T2 (Active/Wait State):
+    Slave ở ST_ACTIVE: HREADYOUT kéo xuống 0 (1 wait state)
+    BFM phát HWDATA=0xDEADBEEF (data phase bắt đầu)
+    Slave load beat_cnt=1 (SINGLE), chuyển ST_WBURST
+
+  T3 (Write + Complete):
+    Slave ở ST_WBURST: ghi memory_slave[1] <= HWDATA=0xDEADBEEF
+    HREADYOUT=1, HRESP=OKAY → beat_cnt=1 ≤ 1 → chuyển ST_IDLE
+
+Assertion check:
+  ✓ HRESP == 2'b00 (OKAY)        → ok = 1
+  ✓ memory_slave[1] = 0xDEADBEEF → TC2 sẽ verify
+
+----------------------------------------------------------------
+TC2 — Single Read  (HADDR=0x04 → expect 0xDEADBEEF)
+----------------------------------------------------------------
+
+         T1    T2    T3    T4
+HCLK    ↑     ↑     ↑     ↑
+HSELx   0→1   1     0     0
+HADDR   x→04  04    0     0
+HTRANS  00→10 10→00 00    00
+HWRITE  0     0     0     0
+HWDATA  x     x     x     x
+HRDATA  x     x  →DEAD    x    ← T3: HRDATA hợp lệ
+HREADYOUT 1   0     1     1    ← T2=0: ST_ACTIVE wait state
+HRESP   00    00    00    00
+ps_slave IDLE ACTIV RBURS IDLE
+
+Điểm quan trọng cần check trên waveform:
+  → HRDATA chỉ hợp lệ tại T3 (khi HREADYOUT=1 lần đầu)
+  → BFM sample HRDATA đúng tại cạnh ↑ T3
+  → Nếu BFM sample sai chu kỳ → rdata sẽ = 0 hoặc garbage
+
+----------------------------------------------------------------
+TC3 — INCR4 Write Burst  (base=0x10, 4 words)
+----------------------------------------------------------------
+
+         T1     T2     T3     T4     T5     T6
+HCLK    ↑      ↑      ↑      ↑      ↑      ↑
+HSELx   0→1    1      1      1      0      0
+HADDR   →0x10  0x14   0x18   0x1C   0      0
+HTRANS  →NONSEQ SEQ   SEQ    SEQ    IDLE   IDLE
+HWRITE  →1     1      1      1      0      0
+HWDATA  x      →AA01  →BB02  →CC03  →DD04  x
+HREADYOUT 1    0→1    1      1      1      1
+HRESP   00     00     00     00     00     00
+beat_cnt x     →4     3      2      1      0
+ps_slave IDLE  ACTIV  WBURS  WBURS  WBURS  IDLE
+
+Giải thích:
+  T1: Address Phase beat 0 — NONSEQ, HADDR=0x10, HBURST=INCR4
+  T2: ST_ACTIVE (wait state) + đồng thời BFM phát HADDR=0x14 SEQ
+      Slave load beat_cnt=4
+  T3: Beat 0 data (HWDATA=0xAAAA0001) ghi vào memory_slave[4]
+      Địa chỉ tịnh tiến: local_addr = 4→5
+  T4: Beat 1 data (HWDATA=0xBBBB0002) ghi vào memory_slave[5]
+  T5: Beat 2 data (HWDATA=0xCCCC0003) ghi vào memory_slave[6]
+      Beat cuối: beat_cnt=1 → chuyển ST_IDLE sau beat này
+  T6: Beat 3 data (HWDATA=0xDDDD0004) ghi vào memory_slave[7]
+
+Kiểm tra trên waveform:
+  → local_addr phải tịnh tiến: 4→5→6→7
+  → beat_cnt phải đếm xuống:  4→3→2→1→0
+  → HREADYOUT chỉ = 0 tại T2 (ST_ACTIVE), còn lại = 1
+
+----------------------------------------------------------------
+TC4 — INCR4 Read Burst  (base=0x10, verify TC3 data)
+----------------------------------------------------------------
+
+Điểm phức tạp nhất: AHB pipeline 1 chu kỳ
+
+         T1      T2      T3      T4      T5      T6
+HADDR   →0x10   0x14    0x18    0x1C    0       0
+HTRANS  →NONSEQ SEQ     SEQ     SEQ     IDLE    IDLE
+HRDATA  x       x      →AA01  →BB02   →CC03   →DD04
+HREADYOUT 1     0→1     1       1       1       1
+
+Pipeline mapping:
+  BFM phát địa chỉ 0x10 tại T1
+  Slave xử lý (ACTIVE wait) tại T2
+  HRDATA = memory[0x10] hợp lệ tại T3 → BFM capture rdata[0]
+  HRDATA = memory[0x14] hợp lệ tại T4 → BFM capture rdata[1]
+  HRDATA = memory[0x18] hợp lệ tại T5 → BFM capture rdata[2]
+  HRDATA = memory[0x1C] hợp lệ tại T6 → BFM capture rdata[3]
+
+Lỗi thường gặp khi debug TC4:
+  Nếu rdata[0] = 0 và rdata[1] = 0xAAAA0001:
+    → BFM sample lệch 1 chu kỳ (off-by-one)
+    → Kiểm tra lại vị trí "while(!HREADYOUT)" trong task
+
+----------------------------------------------------------------
+TC5 — SPLIT Response  (HADDR=0x000)
+----------------------------------------------------------------
+
+Đây là test case phức tạp nhất. Giản đồ 3 giai đoạn:
+
+GIAI ĐOẠN 1: Slave phát SPLIT
+
+         T1      T2      T3      T4
+HADDR   →0x000  0x000   0       0
+HTRANS  →NONSEQ IDLE    IDLE    IDLE
+HREADYOUT 1     0       1       1    ← T2=0: cycle 1 SPLIT
+                                     ← T3=1: cycle 2 SPLIT
+HRESP   00      11      11      00   ← 11=SPLIT kéo dài 2 chu kỳ
+HSPLITx 0000    0000    0002    0000 ← bit[1]=1 tại T3 (HMASTER=1)
+ps_slave IDLE   RBURST  LITTLE  IDLE
+
+Giải thích chi tiết:
+  T1: Address Phase — BFM phát HADDR=0x000, HTRANS=NONSEQ
+  T2: Slave vào ST_ACTIVE (wait), rồi ST_RBURST
+      Phát hiện local_addr == 8'h00 → kích SPLIT
+      → HREADYOUT=0, HRESP=SPLIT (chu kỳ 1)
+      → Đồng thời chốt split_master_reg = HMASTER = 4'd1
+  T3: Slave vào ST_LITTLE (chu kỳ 2 của SPLIT)
+      → HREADYOUT=1, HRESP=SPLIT
+      → Vì HMASTLOCK=0: phát HSPLITx = 16'h0001 << 1 = 0x0002
+      → HSPLITx[1] = 1 (Master 1 được phép retry)
+  T4: Slave về ST_IDLE
+
+Tại sao ok=0 là ĐÚNG ở TC5:
+  BFM task ahb_read_single() kiểm tra HRESP == R_OKAY
+  Nhưng HRESP = SPLIT (2'b11) ≠ OKAY (2'b00) → ok=0
+  Đây là behavior ĐÚNG của giao thức — SPLIT không phải lỗi
+  Check "TC5 HRESP=SPLIT detected (ok=0 correct)" nên PASS
+
+Kiểm tra trên waveform:
+  → HRESP = 2'b11 phải kéo dài ĐÚNG 2 chu kỳ (không hơn, không kém)
+  → HREADYOUT = 0 ở chu kỳ 1, = 1 ở chu kỳ 2
+  → HSPLITx bit [1] = 1 đúng 1 chu kỳ (không được giữ lâu hơn)
+  → ps_slave: IDLE → ACTIVE → RBURST → LITTLE → IDLE
+
+----------------------------------------------------------------
+TC6 — Seed Memory Value  (memory_slave[2] = 32'd30)
+----------------------------------------------------------------
+
+Đây là test đơn giản nhất nhưng quan trọng:
+  → Verify rằng initial block trong AHB_Slave đã chạy đúng
+  → memory_slave[2] = 32'd30 = 32'h0000_001E
+  → HADDR byte = word_index * 4 = 2 * 4 = 8 = 0x00000008
+
+Nếu TC6 FAIL:
+  → Kiểm tra HADDR[9:2] = 8'h02 (word index = 2)
+  → Kiểm tra initial block có chạy không (một số tool bỏ qua)
+
+----------------------------------------------------------------
+TC7 — SRAM Persistence
+----------------------------------------------------------------
+
+  → Đọc lại HADDR=0x04 sau khi đã ghi ở TC1
+  → Đảm bảo dữ liệu không bị xóa bởi TC3,TC4,TC5
+  → Nếu FAIL: có thể có aliasing địa chỉ hoặc lỗi local_addr
+
+================================================================
+  CHECKLIST DEBUG KHI CÓ FAILURE
+================================================================
+
+□ 1. Kiểm tra reset: HRESETn = 0 trong 5 chu kỳ rồi mới = 1?
+     → Xem waveform tại t=0 đến t=50ns
+
+□ 2. Kiểm tra FSM: ps_slave có đi qua đúng sequence?
+     TC Write: IDLE → ACTIVE → WBURST → IDLE
+     TC Read:  IDLE → ACTIVE → RBURST → IDLE
+     TC SPLIT: IDLE → ACTIVE → RBURST → LITTLE → IDLE
+
+□ 3. Kiểm tra HREADYOUT:
+     → = 0 chỉ tại ST_ACTIVE (1 chu kỳ wait)
+     → = 0 thêm 1 chu kỳ tại ST_RBURST khi SPLIT
+     → = 1 tất cả các trạng thái khác
+
+□ 4. Kiểm tra pipeline alignment:
+     HWDATA phải hợp lệ 1 chu kỳ SAU khi HADDR được phát
+     HRDATA hợp lệ khi HREADYOUT = 1 lần đầu tiên
+
+□ 5. Kiểm tra local_addr:
+     HADDR[9:2] = byte_addr / 4
+     0x04 → local_addr = 1
+     0x08 → local_addr = 2
+     0x10 → local_addr = 4
+
+□ 6. Kiểm tra beat_cnt:
+     SINGLE: load 1
+     INCR4:  load 4, đếm xuống 4→3→2→1→IDLE
+
+□ 7. Nếu TC5 FAIL và HSPLITx không toggle:
+     → HMASTER_ID có = 4'd1 không?
+     → split_master_reg có được chốt đúng không?
+     → Kiểm tra HMASTLOCK có đang = 0 không
+
+================================================================
+  PHÂN BIỆT 3 LOẠI "FAIL" KHI DEBUG
+================================================================
+
+TYPE A: Simulation crash / error message
+  → Lỗi syntax hoặc port mismatch
+  → Xem dòng đầu tiên của error log
+
+TYPE B: [FAIL] trong log nhưng simulation tiếp tục
+  → Logic error — BFM nhận sai data hoặc sai response
+  → Cần xem waveform để tìm nguyên nhân
+
+TYPE C: [TIMEOUT] 50us
+  → Có vòng lặp while(!HREADYOUT) không bao giờ thoát
+  → Slave stuck ở một trạng thái không phát HREADYOUT=1
+  → Xem ps_slave cuối cùng là gì
+
+================================================================
