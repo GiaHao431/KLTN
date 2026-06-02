@@ -99,7 +99,7 @@ module ahb_master_bfm (
     task automatic ahb_write_single(
         input  logic [31:0] addr,
         input  logic [31:0] data,
-        output logic        ok
+        ref    logic        ok
     );
         // Address Phase
         @(posedge HCLK); #1;
@@ -130,8 +130,8 @@ module ahb_master_bfm (
     // ----------------------------------------------------------
     task automatic ahb_read_single(
         input  logic [31:0] addr,
-        output logic [31:0] data,
-        output logic        ok
+        ref    logic [31:0] data,
+        ref    logic        ok
     );
         // Address Phase
         @(posedge HCLK); #1;
@@ -161,7 +161,7 @@ module ahb_master_bfm (
     task automatic ahb_write_burst_incr4(
         input  logic [31:0] base_addr,
         input  logic [31:0] wdata [0:3],
-        output logic        ok
+        ref    logic        ok
     );
         logic [31:0] cur_addr;
         ok = 1'b1;
@@ -215,8 +215,8 @@ module ahb_master_bfm (
     // ----------------------------------------------------------
     task automatic ahb_read_burst_incr4(
         input  logic [31:0] base_addr,
-        output logic [31:0] rdata [0:3],
-        output logic        ok
+        ref    logic [31:0] rdata [0:3],
+        ref    logic        ok
     );
         logic [31:0] cur_addr;
         ok = 1'b1;
