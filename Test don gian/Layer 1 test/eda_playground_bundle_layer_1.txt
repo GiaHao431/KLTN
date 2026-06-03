@@ -1,0 +1,738 @@
+// ============================================================
+//  EDA PLAYGROUND — AHB Slave Unit Test (Layer 1)
+//  File duy nhất: paste toàn bộ vào ô "Design" trên EDA Playground
+//
+//  Thứ tự compile (từ trên xuống):
+//   1. ahb_master_bfm   — Bus Functional Model (driver)
+//   2. AHB_Slave        — DUT
+//   3. tb_ahb_slave     — Top-level testbench
+// ============================================================
+
+`timescale 1ns / 1ps
+
+// ============================================================
+// SECTION 1 — AHB Master BFM
+// ============================================================
+
+`define T_IDLE   2'b00
+`define T_BUSY   2'b01
+`define T_NONSEQ 2'b10
+`define T_SEQ    2'b11
+
+`define B_SINGLE 3'b000
+`define B_INCR   3'b001
+`define B_WRAP4  3'b010
+`define B_INCR4  3'b011
+`define B_WRAP8  3'b100
+`define B_INCR8  3'b101
+`define B_WRAP16 3'b110
+`define B_INCR16 3'b111
+
+`define R_OKAY   2'b00
+`define R_ERROR  2'b01
+`define R_RETRY  2'b10
+`define R_SPLIT  2'b11
+
+`define SZ_BYTE     3'b000
+`define SZ_HALFWORD 3'b001
+`define SZ_WORD     3'b010
+
+module ahb_master_bfm (
+    input  logic        HCLK,
+    output logic        HRESETn,
+    output logic [31:0] HADDR,
+    output logic [1:0]  HTRANS,
+    output logic        HWRITE,
+    output logic [2:0]  HSIZE,
+    output logic [2:0]  HBURST,
+    output logic [3:0]  HMASTER,
+    output logic        HMASTLOCK,
+    output logic [31:0] HWDATA,
+    input  logic [31:0] HRDATA,
+    input  logic        HREADYOUT,
+    input  logic [1:0]  HRESP,
+    output logic        HSELx
+);
+
+    initial begin
+        HRESETn   = 1'b1;
+        HADDR     = 32'h0;
+        HTRANS    = `T_IDLE;
+        HWRITE    = 1'b0;
+        HSIZE     = `SZ_WORD;
+        HBURST    = `B_SINGLE;
+        HMASTER   = 4'd1;
+        HMASTLOCK = 1'b0;
+        HWDATA    = 32'h0;
+        HSELx     = 1'b0;
+    end
+
+    // ----------------------------------------------------------
+    // TASK: ahb_reset
+    // ----------------------------------------------------------
+    task automatic ahb_reset(input int cycles = 5);
+        HRESETn = 1'b0;
+        HADDR   = 32'h0;
+        HTRANS  = `T_IDLE;
+        HWRITE  = 1'b0;
+        HWDATA  = 32'h0;
+        HSELx   = 1'b0;
+        repeat (cycles) @(posedge HCLK);
+        #1;
+        HRESETn = 1'b1;
+        @(posedge HCLK);
+    endtask
+
+    // ----------------------------------------------------------
+    // TASK: ahb_idle
+    // ----------------------------------------------------------
+    task automatic ahb_idle();
+        @(posedge HCLK); #1;
+        HTRANS = `T_IDLE;
+        HADDR  = 32'h0;
+        HSELx  = 1'b0;
+    endtask
+
+    // ----------------------------------------------------------
+    // TASK: ahb_write_single
+    // ----------------------------------------------------------
+    task automatic ahb_write_single(
+        input  logic [31:0] addr,
+        input  logic [31:0] data,
+        ref    logic        ok
+    );
+        // Address Phase
+        @(posedge HCLK); #1;
+        HSELx  = 1'b1;
+        HADDR  = addr;
+        HTRANS = `T_NONSEQ;
+        HWRITE = 1'b1;
+        HSIZE  = `SZ_WORD;
+        HBURST = `B_SINGLE;
+
+        // Data Phase
+        @(posedge HCLK); #1;
+        HWDATA = data;
+        HTRANS = `T_IDLE;
+        HSELx  = 1'b0;
+
+        while (!HREADYOUT) @(posedge HCLK);
+
+        ok = (HRESP == `R_OKAY) ? 1'b1 : 1'b0;
+
+        @(posedge HCLK); #1;
+        HWRITE = 1'b0;
+        HWDATA = 32'h0;
+    endtask
+
+    // ----------------------------------------------------------
+    // TASK: ahb_read_single
+    // ----------------------------------------------------------
+    task automatic ahb_read_single(
+        input  logic [31:0] addr,
+        ref    logic [31:0] data,
+        ref    logic        ok
+    );
+        // Address Phase
+        @(posedge HCLK); #1;
+        HSELx  = 1'b1;
+        HADDR  = addr;
+        HTRANS = `T_NONSEQ;
+        HWRITE = 1'b0;
+        HSIZE  = `SZ_WORD;
+        HBURST = `B_SINGLE;
+
+        // Data Phase
+        @(posedge HCLK); #1;
+        HTRANS = `T_IDLE;
+        HSELx  = 1'b0;
+
+        while (!HREADYOUT) @(posedge HCLK);
+
+        data = HRDATA;
+        ok   = (HRESP == `R_OKAY) ? 1'b1 : 1'b0;
+
+        @(posedge HCLK); #1;
+    endtask
+
+    // ----------------------------------------------------------
+    // TASK: ahb_write_burst_incr4
+    // ----------------------------------------------------------
+    task automatic ahb_write_burst_incr4(
+        input  logic [31:0] base_addr,
+        input  logic [31:0] wdata [0:3],
+        ref    logic        ok
+    );
+        logic [31:0] cur_addr;
+        ok = 1'b1;
+
+        // Beat 0 - Address Phase
+        @(posedge HCLK); #1;
+        HSELx    = 1'b1;
+        HADDR    = base_addr;
+        HTRANS   = `T_NONSEQ;
+        HWRITE   = 1'b1;
+        HSIZE    = `SZ_WORD;
+        HBURST   = `B_INCR4;
+        cur_addr = base_addr;
+
+        // Beat 1..3: SEQ address + data phase của beat trước
+        for (int i = 0; i < 3; i++) begin
+            @(posedge HCLK); #1;
+            while (!HREADYOUT) begin
+                @(posedge HCLK); #1;
+            end
+            HWDATA   = wdata[i];
+            cur_addr = cur_addr + 32'd4;
+            HADDR    = cur_addr;
+            HTRANS   = `T_SEQ;
+            if (HRESP != `R_OKAY) ok = 1'b0;
+        end
+
+        // Beat cuối - data beat 3
+        @(posedge HCLK); #1;
+        while (!HREADYOUT) begin
+            @(posedge HCLK); #1;
+        end
+        HWDATA = wdata[3];
+        HTRANS = `T_IDLE;
+        HSELx  = 1'b0;
+        HADDR  = 32'h0;
+        if (HRESP != `R_OKAY) ok = 1'b0;
+
+        @(posedge HCLK); #1;
+        while (!HREADYOUT) begin
+            @(posedge HCLK); #1;
+        end
+        if (HRESP != `R_OKAY) ok = 1'b0;
+
+        HWRITE = 1'b0;
+        HWDATA = 32'h0;
+    endtask
+
+    // ----------------------------------------------------------
+    // TASK: ahb_read_burst_incr4
+    // ----------------------------------------------------------
+    task automatic ahb_read_burst_incr4(
+        input  logic [31:0] base_addr,
+        ref    logic [31:0] rdata [0:3],
+        ref    logic        ok
+    );
+        logic [31:0] cur_addr;
+        ok = 1'b1;
+
+        // Beat 0 - Address Phase
+        @(posedge HCLK); #1;
+        HSELx    = 1'b1;
+        HADDR    = base_addr;
+        HTRANS   = `T_NONSEQ;
+        HWRITE   = 1'b0;
+        HSIZE    = `SZ_WORD;
+        HBURST   = `B_INCR4;
+        cur_addr = base_addr;
+
+        // Beat 1..3: SEQ address + capture HRDATA beat trước
+        for (int i = 0; i < 3; i++) begin
+            @(posedge HCLK); #1;
+            while (!HREADYOUT) begin
+                @(posedge HCLK); #1;
+            end
+            rdata[i] = HRDATA;
+            if (HRESP != `R_OKAY) ok = 1'b0;
+            cur_addr = cur_addr + 32'd4;
+            HADDR    = cur_addr;
+            HTRANS   = `T_SEQ;
+        end
+
+        // Beat cuối - capture HRDATA[3]
+        @(posedge HCLK); #1;
+        while (!HREADYOUT) begin
+            @(posedge HCLK); #1;
+        end
+        rdata[3] = HRDATA;
+        HTRANS   = `T_IDLE;
+        HSELx    = 1'b0;
+        HADDR    = 32'h0;
+        if (HRESP != `R_OKAY) ok = 1'b0;
+
+        @(posedge HCLK); #1;
+    endtask
+
+endmodule : ahb_master_bfm
+
+
+// ============================================================
+// SECTION 2 — AHB_Slave DUT
+// ============================================================
+
+module AHB_Slave (
+    input  logic        HCLK,
+    input  logic        HRESETn,
+    input  logic        HREADY_IN,
+    input  logic        HSELx,
+    input  logic [31:0] HADDR,
+    input  logic [1:0]  HTRANS,
+    input  logic        HWRITE,
+    input  logic [2:0]  HSIZE,
+    input  logic [2:0]  HBURST,
+    input  logic [31:0] HWDATA,
+    output logic [31:0] HRDATA,
+    input  logic [3:0]  HMASTER,
+    input  logic        HMASTLOCK,
+    output logic [15:0] HSPLITx,
+    output logic        HREADYOUT,
+    output logic [1:0]  HRESP
+);
+
+localparam logic [1:0]
+    T_IDLE   = 2'b00, T_BUSY  = 2'b01,
+    T_NONSEQ = 2'b10, T_SEQ   = 2'b11;
+
+localparam logic [1:0]
+    R_OKAY  = 2'b00, R_ERROR = 2'b01,
+    R_RETRY = 2'b10, R_SPLIT = 2'b11;
+
+localparam logic [2:0]
+    B_SINGLE = 3'b000, B_INCR   = 3'b001,
+    B_WRAP4  = 3'b010, B_INCR4  = 3'b011,
+    B_WRAP8  = 3'b100, B_INCR8  = 3'b101,
+    B_WRAP16 = 3'b110, B_INCR16 = 3'b111;
+
+localparam logic [2:0]
+    ST_IDLE      = 3'b000,
+    ST_ACTIVE    = 3'b001,
+    ST_AGAIN     = 3'b010,
+    ST_LITTLE    = 3'b011,
+    ST_TIME_PASS = 3'b111,
+    ST_WBURST    = 3'b100,
+    ST_RBURST    = 3'b101;
+
+logic [2:0]  ps_slave, ns_slave;
+logic [7:0]  local_addr, local_addr_base;
+logic        local_write;
+logic [2:0]  local_burst, local_size;
+logic [5:0]  beat_cnt;
+logic [3:0]  split_master_reg;
+logic [31:0] memory_slave [0:255];
+
+initial begin : mem_init
+    for (int i = 0; i < 256; i++) memory_slave[i] = 32'd0;
+    memory_slave[0] = 32'd10;
+    memory_slave[1] = 32'd20;
+    memory_slave[2] = 32'd30;
+end
+
+function automatic logic [7:0] next_burst_addr(
+    input logic [7:0] base, input logic [7:0] cur, input logic [2:0] burst
+);
+    logic [7:0] lin;
+    lin = cur + 8'h01;
+    case (burst)
+        B_WRAP4  : return {base[7:2], lin[1:0]};
+        B_WRAP8  : return {base[7:3], lin[2:0]};
+        B_WRAP16 : return {base[7:4], lin[3:0]};
+        default  : return lin;
+    endcase
+endfunction
+
+// SEQ BLOCK 1 — FSM state register
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn) ps_slave <= ST_IDLE;
+    else          ps_slave <= ns_slave;
+end
+
+// SEQ BLOCK 2 — Address latch
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn) begin
+        local_addr      <= 8'h00;
+        local_addr_base <= 8'h00;
+        local_write     <= 1'b0;
+        local_burst     <= B_SINGLE;
+        local_size      <= 3'b010;
+    end else begin
+        if (HSELx && HREADY_IN && (HTRANS == T_NONSEQ) &&
+            (ps_slave == ST_IDLE || ps_slave == ST_AGAIN)) begin
+            local_addr      <= HADDR[9:2];
+            local_addr_base <= HADDR[9:2];
+            local_write     <= HWRITE;
+            local_burst     <= HBURST;
+            local_size      <= HSIZE;
+        end else if ((ps_slave == ST_WBURST || ps_slave == ST_RBURST) &&
+                      beat_cnt > 6'd1) begin
+            local_addr <= next_burst_addr(local_addr_base, local_addr, local_burst);
+        end
+    end
+end
+
+// SEQ BLOCK 3 — Beat counter
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn) begin
+        beat_cnt <= 6'd0;
+    end else begin
+        case (ps_slave)
+            ST_ACTIVE : begin
+                case (local_burst)
+                    B_SINGLE           : beat_cnt <= 6'd1;
+                    B_INCR             : beat_cnt <= 6'd32;
+                    B_WRAP4, B_INCR4   : beat_cnt <= 6'd4;
+                    B_WRAP8, B_INCR8   : beat_cnt <= 6'd8;
+                    B_WRAP16, B_INCR16 : beat_cnt <= 6'd16;
+                    default            : beat_cnt <= 6'd1;
+                endcase
+            end
+            ST_WBURST, ST_RBURST : begin
+                if (beat_cnt > 6'd0) beat_cnt <= beat_cnt - 6'd1;
+            end
+            default : ;
+        endcase
+    end
+end
+
+// SEQ BLOCK 4 — SRAM write
+always_ff @(posedge HCLK) begin
+    if (ps_slave == ST_WBURST)
+        memory_slave[local_addr] <= HWDATA;
+end
+
+// SEQ BLOCK 5 — SPLIT master latch
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn) begin
+        split_master_reg <= 4'h0;
+    end else if (ps_slave  == ST_RBURST  &&
+                 local_burst == B_SINGLE &&
+                 local_addr  == 8'h00) begin
+        split_master_reg <= HMASTER;
+    end
+end
+
+// COMB BLOCK — FSM next-state & outputs
+always_comb begin : fsm_comb
+    ns_slave  = ps_slave;
+    HREADYOUT = 1'b1;
+    HRESP     = R_OKAY;
+    HRDATA    = 32'h0000_0000;
+    HSPLITx   = 16'h0000;
+
+    case (ps_slave)
+
+        ST_IDLE : begin
+            HREADYOUT = 1'b1;
+            HRESP     = R_OKAY;
+            if (HSELx && HREADY_IN && (HTRANS == T_NONSEQ))
+                ns_slave = ST_ACTIVE;
+        end
+
+        ST_ACTIVE : begin
+            HREADYOUT = 1'b0;
+            HRESP     = R_OKAY;
+            ns_slave  = local_write ? ST_WBURST : ST_RBURST;
+        end
+
+        ST_AGAIN : begin
+            HREADYOUT = 1'b0;
+            HRESP     = R_RETRY;
+            ns_slave  = ST_ACTIVE;
+        end
+
+        ST_WBURST : begin
+            HRESP     = R_OKAY;
+            HREADYOUT = 1'b1;
+            ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_WBURST;
+        end
+
+        ST_RBURST : begin
+            HRDATA = memory_slave[local_addr];
+            case (local_burst)
+                B_SINGLE : begin
+                    if (local_addr == 8'h00) begin
+                        HREADYOUT = 1'b0;
+                        HRESP     = R_SPLIT;
+                        HRDATA    = 32'h0000_0000;
+                        ns_slave  = ST_LITTLE;
+                    end else begin
+                        HREADYOUT = 1'b1;
+                        HRESP     = R_OKAY;
+                        ns_slave  = ST_IDLE;
+                    end
+                end
+                default : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_RBURST;
+                end
+            endcase
+        end
+
+        ST_LITTLE : begin
+            HREADYOUT = 1'b1;
+            HRESP     = R_SPLIT;
+            if (!HMASTLOCK) begin
+                HSPLITx  = 16'h0001 << split_master_reg;
+                ns_slave = ST_IDLE;
+            end else begin
+                HSPLITx  = 16'h0000;
+                ns_slave = ST_TIME_PASS;
+            end
+        end
+
+        ST_TIME_PASS : begin
+            HREADYOUT = 1'b1;
+            HRESP     = R_OKAY;
+            if (!HMASTLOCK) begin
+                HSPLITx  = 16'h0001 << split_master_reg;
+                ns_slave = ST_IDLE;
+            end else begin
+                HSPLITx  = 16'h0000;
+                ns_slave = ST_TIME_PASS;
+            end
+        end
+
+        default : begin
+            ns_slave  = ST_IDLE;
+            HREADYOUT = 1'b1;
+            HRESP     = R_OKAY;
+        end
+
+    endcase
+end : fsm_comb
+
+endmodule : AHB_Slave
+
+
+// ============================================================
+// SECTION 3 — Testbench Top
+// ============================================================
+
+module tb_ahb_slave;
+
+    // ── Clock ──────────────────────────────────────────────
+    logic HCLK;
+    initial HCLK = 0;
+    always #5 HCLK = ~HCLK;   // 100 MHz
+
+    // ── Wires ──────────────────────────────────────────────
+    logic        HRESETn;
+    logic [31:0] HADDR;
+    logic [1:0]  HTRANS;
+    logic        HWRITE;
+    logic [2:0]  HSIZE;
+    logic [2:0]  HBURST;
+    logic [3:0]  HMASTER_ID;
+    logic        HMASTLOCK;
+    logic        HSELx;
+    logic [31:0] HWDATA;
+    logic [31:0] HRDATA;
+    logic        HREADYOUT;
+    logic [1:0]  HRESP;
+    logic [15:0] HSPLITx;
+
+    // ── BFM ────────────────────────────────────────────────
+    ahb_master_bfm u_bfm (
+        .HCLK      (HCLK),
+        .HRESETn   (HRESETn),
+        .HADDR     (HADDR),
+        .HTRANS    (HTRANS),
+        .HWRITE    (HWRITE),
+        .HSIZE     (HSIZE),
+        .HBURST    (HBURST),
+        .HMASTER   (HMASTER_ID),
+        .HMASTLOCK (HMASTLOCK),
+        .HWDATA    (HWDATA),
+        .HRDATA    (HRDATA),
+        .HREADYOUT (HREADYOUT),
+        .HRESP     (HRESP),
+        .HSELx     (HSELx)
+    );
+
+    // ── DUT ────────────────────────────────────────────────
+    // HREADY_IN = HREADYOUT: self-feedback hợp lệ cho unit test
+    AHB_Slave u_dut (
+        .HCLK      (HCLK),
+        .HRESETn   (HRESETn),
+        .HREADY_IN (HREADYOUT),
+        .HSELx     (HSELx),
+        .HADDR     (HADDR),
+        .HTRANS    (HTRANS),
+        .HWRITE    (HWRITE),
+        .HSIZE     (HSIZE),
+        .HBURST    (HBURST),
+        .HWDATA    (HWDATA),
+        .HRDATA    (HRDATA),
+        .HMASTER   (HMASTER_ID),
+        .HMASTLOCK (HMASTLOCK),
+        .HSPLITx   (HSPLITx),
+        .HREADYOUT (HREADYOUT),
+        .HRESP     (HRESP)
+    );
+
+    // ── Scoreboard ─────────────────────────────────────────
+    int pass_count = 0;
+    int fail_count = 0;
+
+    task automatic check(
+        input string test_name,
+        input logic  condition,
+        input string msg = ""
+    );
+        if (condition) begin
+            $display("[PASS] %-40s %s", test_name, msg);
+            pass_count++;
+        end else begin
+            $display("[FAIL] %-40s %s", test_name, msg);
+            fail_count++;
+        end
+    endtask
+
+    // ── Waveform dump ──────────────────────────────────────
+    initial begin
+        $dumpfile("dump.vcd");
+        $dumpvars(0, tb_ahb_slave);
+    end
+
+    // ── Timeout watchdog ───────────────────────────────────
+    initial begin
+        #50000;
+        $display("[TIMEOUT] Simulation exceeded 50us!");
+        $finish;
+    end
+
+    // ── Test variables ─────────────────────────────────────
+    logic        ok;
+    logic [31:0] rdata;
+    logic [31:0] rdata_burst [0:3];
+    logic [31:0] wdata_burst [0:3];
+
+    // ── Main sequence ──────────────────────────────────────
+    initial begin
+        $display("==========================================================");
+        $display("  AHB_Slave Unit Testbench — Layer 1                      ");
+        $display("==========================================================");
+
+        // PHASE 0: Reset
+        $display("\n--- PHASE 0: Reset ---");
+        u_bfm.ahb_reset(5);
+        $display("    Reset released.\n");
+
+        // --------------------------------------------------
+        // TC1 — Single Write
+        // --------------------------------------------------
+        $display("--- TC1: Single Write (HADDR=0x04) ---");
+        u_bfm.ahb_write_single(32'h0000_0004, 32'hDEAD_BEEF, ok);
+        check("TC1 Write OKAY response",
+              ok === 1'b1,
+              "addr=0x04 data=0xDEADBEEF");
+        $display("");
+
+        // --------------------------------------------------
+        // TC2 — Single Read (verify TC1)
+        // --------------------------------------------------
+        $display("--- TC2: Single Read → Write-then-Read integrity ---");
+        u_bfm.ahb_read_single(32'h0000_0004, rdata, ok);
+        check("TC2 Read OKAY response",
+              ok === 1'b1, "addr=0x04");
+        check("TC2 Data integrity 0xDEADBEEF",
+              rdata === 32'hDEAD_BEEF,
+              $sformatf("Got=0x%08X", rdata));
+        $display("");
+
+        // --------------------------------------------------
+        // TC3 — INCR4 Write Burst
+        // --------------------------------------------------
+        $display("--- TC3: INCR4 Write Burst (HADDR=0x10..0x1C) ---");
+        wdata_burst[0] = 32'hAAAA_0001;
+        wdata_burst[1] = 32'hBBBB_0002;
+        wdata_burst[2] = 32'hCCCC_0003;
+        wdata_burst[3] = 32'hDDDD_0004;
+        u_bfm.ahb_write_burst_incr4(32'h0000_0010, wdata_burst, ok);
+        check("TC3 INCR4 Write all beats OKAY",
+              ok === 1'b1, "4 beats addr=0x10-0x1C");
+        $display("");
+
+        // --------------------------------------------------
+        // TC4 — INCR4 Read Burst (verify TC3)
+        // --------------------------------------------------
+        $display("--- TC4: INCR4 Read Burst → Verify TC3 data ---");
+        u_bfm.ahb_read_burst_incr4(32'h0000_0010, rdata_burst, ok);
+        check("TC4 INCR4 Read all beats OKAY",
+              ok === 1'b1, "4 beats addr=0x10-0x1C");
+        check("TC4 Beat[0]=0xAAAA0001",
+              rdata_burst[0] === 32'hAAAA_0001,
+              $sformatf("Got=0x%08X", rdata_burst[0]));
+        check("TC4 Beat[1]=0xBBBB0002",
+              rdata_burst[1] === 32'hBBBB_0002,
+              $sformatf("Got=0x%08X", rdata_burst[1]));
+        check("TC4 Beat[2]=0xCCCC0003",
+              rdata_burst[2] === 32'hCCCC_0003,
+              $sformatf("Got=0x%08X", rdata_burst[2]));
+        check("TC4 Beat[3]=0xDDDD0004",
+              rdata_burst[3] === 32'hDDDD_0004,
+              $sformatf("Got=0x%08X", rdata_burst[3]));
+        $display("");
+
+        // --------------------------------------------------
+        // TC5 — SPLIT trigger (HADDR=0x000)
+        // --------------------------------------------------
+        $display("--- TC5: Single Read ADDR=0x0 → SPLIT trigger ---");
+        fork
+            begin : split_mon
+                logic split_seen;
+                split_seen = 1'b0;
+                repeat(25) begin
+                    @(posedge HCLK);
+                    if (HSPLITx[1] === 1'b1) split_seen = 1'b1;
+                end
+                check("TC5 HSPLITx[1] asserted after SPLIT",
+                      split_seen === 1'b1,
+                      "Slave must release master via HSPLITx");
+            end
+            begin : split_xfer
+                u_bfm.ahb_read_single(32'h0000_0000, rdata, ok);
+                check("TC5 HRESP=SPLIT detected (ok=0 correct)",
+                      ok === 1'b0,
+                      $sformatf("HRESP=0b%02b (SPLIT=11 expected)", HRESP));
+            end
+        join
+        $display("");
+
+        // --------------------------------------------------
+        // TC6 — Read seed value (không bị ghi đè)
+        // --------------------------------------------------
+        $display("--- TC6: Read pre-init seed memory_slave[2]=30 ---");
+        u_bfm.ahb_read_single(32'h0000_0008, rdata, ok);
+        check("TC6 Read OKAY", ok === 1'b1, "addr=0x08 (word index 2)");
+        check("TC6 Seed value = 32'd30",
+              rdata === 32'd30,
+              $sformatf("Got=%0d", rdata));
+        $display("");
+
+        // --------------------------------------------------
+        // TC7 — SRAM persistence (re-read TC1)
+        // --------------------------------------------------
+        $display("--- TC7: SRAM persistence — re-read TC1 address ---");
+        u_bfm.ahb_read_single(32'h0000_0004, rdata, ok);
+        check("TC7 Read OKAY", ok === 1'b1, "addr=0x04");
+        check("TC7 Data still = 0xDEADBEEF",
+              rdata === 32'hDEAD_BEEF,
+              $sformatf("Got=0x%08X", rdata));
+        $display("");
+
+        // --------------------------------------------------
+        // Summary
+        // --------------------------------------------------
+        #20;
+        $display("==========================================================");
+        $display("  SIMULATION COMPLETE");
+        $display("----------------------------------------------------------");
+        $display("  PASS  : %0d", pass_count);
+        $display("  FAIL  : %0d", fail_count);
+        $display("  TOTAL : %0d", pass_count + fail_count);
+        if (fail_count == 0)
+            $display("  RESULT: *** ALL TESTS PASSED ✓ ***");
+        else
+            $display("  RESULT: *** %0d FAILURE(S) — inspect waveform ***",
+                     fail_count);
+        $display("==========================================================");
+        $finish;
+    end
+
+endmodule : tb_ahb_slave
