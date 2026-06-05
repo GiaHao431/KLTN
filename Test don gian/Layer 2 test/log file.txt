@@ -1,0 +1,82 @@
+TOOL:	xrun	25.03-s001: Started on Jun 04, 2026 at 23:21:26 EDT
+xrun: 25.03-s001: (c) Copyright 1995-2025 Cadence Design Systems, Inc.
+	Top level design units:
+		tb_ahb_interconnect_l2
+Loading snapshot worklib.tb_ahb_interconnect_l2:sv .................... Done
+xcelium> source /xcelium25.03/tools/xcelium/files/xmsimrc
+xcelium> run
+================================================================
+ AHB Interconnect ? Layer 2 Integration Test
+ Config: M1 active, M2 idle, 3 Slaves + Default Slave
+================================================================
+
+--- PHASE 0: System Reset ---
+    Reset released. HBUSREQ=1, grant ready.
+
+=== T2.1: TC_L2_M1_WRITE_S1 ===
+    M1 Write 0xDEAD_BEEF ? Slave 1 (0x0000_0010)
+[PASS] T2.1 Write OKAY                          via Interconnect
+[PASS] T2.1 HGRANT_M1 asserted                  HGRANT_M1=1
+[PASS] T2.1 HMASTER=0 (M1 encoding)             HMASTER=0
+
+=== T2.2: TC_L2_M1_READ_S1 ===
+    M1 Read Slave 1 (0x0000_0010) ? verify T2.1 data
+[PASS] T2.2 Read OKAY                           via read_data_mux
+[PASS] T2.2 Data Integrity                      Exp=0xDEADBEEF Got=0xdeadbeef
+
+=== T2.3: TC_L2_DEFAULT_SLAVE_ERR ===
+    M1 Write to 0xC000_0000 ? ERROR expected
+[PASS] T2.3 ERROR detected (ok=0)               HRESP_M=00
+[PASS] T2.3 HSEL_DEFAULT seen                   Decoder selected Default Slave
+[PASS] T2.3 ERROR on HRESP_M                    resp_mux routes HRESP_DEFAULT
+
+=== T2.4: TC_L2_M1_WRITE_S2 ===
+    M1 Write 0xCAFE_1234 ? Slave 2 (0x4000_0010)
+[PASS] T2.4 Write S2 OKAY                       Decoder?S2
+[PASS] T2.4 Read S2 Verify                      Exp=0xCAFE1234 Got=0xcafe1234
+
+=== T2.5: TC_L2_M1_WRITE_S3 ===
+    M1 Write 0xBEEF_5678 ? Slave 3 (0x8000_0010)
+[PASS] T2.5 Write S3 OKAY                       Decoder?S3
+[PASS] T2.5 Read S3 Verify                      Exp=0xBEEF5678 Got=0xbeef5678
+
+=== T2.6: TC_L2_HREADY_GLOBAL ===
+    Monitor HREADY_GLOBAL during write to Slave 1
+[PASS] T2.6 Write OKAY                          Feedback loop works
+[PASS] T2.6 HREADY_GLOBAL dipped to 0           Wait-state propagated
+[PASS] T2.6 HREADY_GLOBAL recovered to 1        Pipeline resumed
+[PASS] T2.6 HREADY===HREADY_GLOBAL              HREADY=1 HREADY_GLOBAL=1
+
+=== T2.7: TC_L2_CROSS_SLAVE_RAW ===
+    Step 1: Write 0xAAAA_BBBB ? S1 (0x0000_0030)
+[PASS] T2.7 Write S1 OKAY                       
+    Step 2: Read S2 seed (0x4000_0008)
+[PASS] T2.7 Read S2 OKAY                        Cross-slave
+[PASS] T2.7 S2 seed=30                          Exp=30 Got=30
+    Step 3: Re-read S1 ? no contamination
+[PASS] T2.7 S1 data preserved                   Exp=0xAAAABBBB Got=0xaaaabbbb
+
+=== T2.8: TC_L2_BURST_VIA_INTC ===
+    INCR4 Write 4 words to S1 (base=0x0000_0040)
+[PASS] T2.8 INCR4 Write OKAY                    4 beats via Intc
+    INCR4 Read 4 words from S1 (base=0x0000_0040)
+[PASS] T2.8 INCR4 Read OKAY                     4 beats via Intc
+[PASS] T2.8 Beat[0]                             Exp=0x11110001 Got=0x11110001
+[PASS] T2.8 Beat[1]                             Exp=0x22220002 Got=0x22220002
+[PASS] T2.8 Beat[2]                             Exp=0x33330003 Got=0x33330003
+[PASS] T2.8 Beat[3]                             Exp=0x44440004 Got=0x44440004
+
+================================================================
+ LAYER 2 SIMULATION COMPLETE
+----------------------------------------------------------------
+ PASS : 26
+ FAIL : 0
+ TOTAL: 26
+ RESULT: *** ALL LAYER 2 TESTS PASSED ***
+================================================================
+Simulation complete via $finish(1) at time 976 NS + 0
+./design.sv:1563         $finish;
+xcelium> exit
+TOOL:	xrun	25.03-s001: Exiting on Jun 04, 2026 at 23:21:28 EDT  (total: 00:00:02)
+Finding VCD file...
+./dump.vcd
