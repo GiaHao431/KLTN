@@ -1,0 +1,105 @@
+Đây là file log sau khi chạy file bundle phiên bản mới nhất hiện tại:
+=== T3.1: TC_L3_ROUND_ROBIN ===
+    M1+M2 request simultaneously, verify alternating grants
+[PASS] T3.1 M1 was granted                           
+[PASS] T3.1 M2 was granted                           No starvation
+[PASS] T3.1 M1 write OKAY                            M1->S1
+[PASS] T3.1 M2 write OKAY                            M2->S2
+[PASS] T3.1 M1 readback                              Got=0xaa11aa11
+
+=== T3.2: TC_L3_HANDOVER ===
+    M1 writing, M2 requests mid-transfer
+[PASS] T3.2 M1 write completed first                 No interrupt
+[PASS] T3.2 M2 write after handover                  Grant switched
+[FAIL] T3.2 S1 data intact                           Got=0x00000000
+[FAIL] T3.2 S2 data intact                           Got=0x00000000
+
+=== T3.3: TC_L3_LOCKED_BURST ===
+    M1 locked INCR4 burst, M2 must NOT preempt
+[PASS] T3.3 No M2 grant during locked burst          HMASTLOCK enforced
+[PASS] T3.3 M1 locked burst OKAY                     4 beats
+[PASS] T3.3 M2 write after lock release              
+[FAIL] T3.3 Beat[0]                                  Got=0x00000000
+[FAIL] T3.3 Beat[3]                                  Got=0x00000000
+
+=== T3.4: TC_L3_SPLIT_SWITCH ===
+    M1 triggers SPLIT (addr=0x0), M2 takes bus, M1 resumes
+[PASS] T3.4 M1 lost grant (split-masked)             Arbiter masked M1
+[PASS] T3.4 M2 granted during M1 split               M2 took bus
+[PASS] T3.4 M1 SPLIT detected (ok=0)                 HRESP saw SPLIT
+[PASS] T3.4 M2 write during split OKAY               M2->S2 succeeded
+[PASS] T3.4 M1 write after SPLIT resume              M1 unmasked and operational
+
+=== T3.5: TC_L3_SPLIT_OR ===
+    Verify HSPLIT_COMBINED = S1|S2|S3 OR logic
+[PASS] T3.5 HSPLIT_S1[0] asserted                    Slave 1 SPLIT signal for M1
+
+=== T3.6: TC_L3_ADDR_MUX_SWITCH ===
+    Verify HADDR_S switches correctly between M1 and M2
+[PASS] T3.6 M1 write S1 OKAY                         
+[PASS] T3.6 M2 write S2 OKAY                         addr_ctrl_mux->M2
+[PASS] T3.6 S1 has M1 data                           Got=0x01add060
+[FAIL] T3.6 S2 has M2 data                           Got=0x00000000
+
+=== T3.7: TC_L3_WDATA_MUX_PIPE ===
+    Verify write_data_mux pipeline delay during master switch
+[PASS] T3.7 M1 pipe write OKAY                       
+[PASS] T3.7 M2 pipe write OKAY                       master_sel_dp switched
+[PASS] T3.7 S1 got M1 data (not M2)                  Got=0xf1fe01d0
+[FAIL] T3.7 S2 got M2 data (not M1)                  Got=0x00000000
+
+=== T3.8: TC_L3_M1_S1_M2_S2 ===
+    M1->S1, M2->S2 (sequential), verify no cross-contamination
+[PASS] T3.8 M1->S1 write OKAY                        
+[PASS] T3.8 M2->S2 write OKAY                        
+[FAIL] T3.8 S1 data = M1 (no contamination)          Exp=0xAAAA8888 Got=0x00000000
+[FAIL] T3.8 S2 data = M2 (no contamination)          Exp=0xBBBB9999 Got=0x00000000
+
+================================================================
+ LAYER 3 SIMULATION COMPLETE
+----------------------------------------------------------------
+ PASS : 24
+ FAIL : 8
+ TOTAL: 32
+ RESULT: *** 8 TEST(S) FAILED ***
+-Nhận xét: Vấn đề về timeout đã được giải quyết triệt để, tôi đã chạy được hết các test
+thuộc Layer 3, tuy nhiên có một số test đã FAIL và tôi sẽ đưa ra các phân tích chi tiết
+cho bạn dựa vào việc debug waveform như sau:
+1/Tại T3.2 :
+M1 write thành công tại địa chỉ 32'h0000_0020, khi tôi check memory[8] của Slave 1 thì
+thấy data đã được ghi vào đó ngay sau khi transfer hoàn tất nhưng log lại báo
+FAIL T3.2 S1 data intact Got=0x00000000. Ngay sau write transfer của M1 thì đáng lẽ
+sẽ đến pha địa chỉ của M2 (HADDR=32'h4000_0020) nhưng trên waveform lại xuất hiện
+một địa chỉ khác tồn tại trong khoảng 3 chu kỳ thì mới thấy địa chỉ thực sự của M2 
+gửi đến Slave 2 xuất hiện, điều này làm tôi băn khoăn trong quá trình debug. Ngoài ra, 
+write transfer của M2 đến Slave 2 cũng chỉ kéo dài trong 1-2 chu kỳ thì HADDR_S lại 
+chuyển sang 32'h0000_0020 của Slave 1. Khi tôi kiểm tra memory[8] của Slave 2 thì 
+thấy data đã được ghi vào đó nhưng log vẫn báo FAIL. Điều kì lạ nhất là tại thời điểm
+M2 ghi data thành công thì tôi quan sát thấy HSEL_S1=1, HSEL_S2=0, HGRANT_M1=1, HGRANT_M2=0.
+Như vậy, tôi nghĩ lỗi xảy ra do thứ tự bạn đặt các transfer hoặc lỗi về mặt timing (các
+lệnh repeat @(posedge HCLK)).
+
+2/ Tại T3.3 :
+Về cơ bản, chuỗi giao dịch locked transfer do M1 thực hiện (write INCR4 burst transfer) 
+tới Slave 1 diễn ra đúng với quy tắc giao thức. Tuy nhiên, tôi đã thực hiện kiểm tra 
+xem dữ liệu đã được ghi đúng vào các memory_slave tại index 16,17,18,19 thì thấy data
+đã trùng khớp với dữ liệu ghi từ M1 nhưng các biến rdata_burst thì lại không thấy data.
+Trên log báo FAIL đối với beat 0 và beat 3. Một điều không hợp lý ở đây nữa là tại sao trong thread lock_mon, bạn lại dùng repeat(40),
+điều này làm kéo dài simulation time một cách không nên có. Ngoài ra, HADDR_S lại cập
+nhật địa chỉ của M2 gửi Decoder trễ hơn HADDR của riêng M2 tận 2-3 chu kỳ clock. Ngoài ra,
+HWDATA_S bằng 0 trong khi HWDATA của M2 lại có giá trị. Trong giao dịch write single của
+M2 đến Slave 2 cũng không tồn tại wait-state giống như các giao dịch của M1. Ngay sau
+write transfer của M2, M1 thực hiện read burst INCR4 nhưng HADDR_S lại bắt đầu từ
+32'h0000_004C rồi nhảy đến 0000_0000 rồi nhảy đến 0000_0030 (sai địa chỉ hoàn toàn).
+
+3/ Tại T3.4 :
+Mặc dù các test tại T3.4 đều PASS nhưng bạn hãy kiểm tra lại HMASTER tại các chu kỳ
+và HSPLIT_COMBINED=2 tại thời điểm SPLIT response cycle 1. Một vấn đề xảy ra xuyên suốt
+quá trình test đó là tại sao phải toggle giữa việc M1 được grant rồi lại đến M2 được grant.
+Tôi nghĩ rằng chỉ nên thay đổi các tín hiệu đó khi cần thiết trong đúng test case vì nếu
+cứ toggle lặp lại trong suốt quá trình mô phỏng sẽ khiến cho việc debug trở nên khó khăn.
+Ngoài ra, bạn cũng không nên dùng repeat một cách tùy tiện vì tôi expect các transfer
+diễn ra liên tiếp nhau, chỉ repeat khi thực sự cần với số lượng chu kỳ nhỏ nhất có thể.
+Việc bạn dùng repeat chung với fork join cũng gây ra một số vấn đề về timing và debug 
+khó khăn khi các giao dịch cứ bị lẫn lộn. Chính vì điều đó, khi M1 thực hiện u_bfm_m1.ahb_write_single(32'h0000_0050, 32'hAF7E_0500, ok_m1);
+sau SPLIT thì HGRANT_M1=0 và HGRANT_M2=1 -> Điều này có sai không?

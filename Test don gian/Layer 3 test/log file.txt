@@ -1,0 +1,79 @@
+TOOL:	xrun	25.03-s001: Started on Jun 10, 2026 at 04:26:58 EDT
+xrun: 25.03-s001: (c) Copyright 1995-2025 Cadence Design Systems, Inc.
+	Top level design units:
+		tb_ahb_interconnect_l3
+Loading snapshot worklib.tb_ahb_interconnect_l3:sv .................... Done
+xcelium> source /xcelium25.03/tools/xcelium/files/xmsimrc
+xcelium> run
+================================================================
+ AHB Interconnect - Layer 3 System Test (2 Masters Active)
+ Config: M1+M2, 3 Slaves, 1 Default Slave, v2 encoding
+================================================================
+
+--- PHASE 0: System Reset ---
+    Reset done.
+
+=== T3.1: TC_L3_ROUND_ROBIN ===
+    M1+M2 request simultaneously, verify alternating grants
+[PASS] T3.1 M1 was granted                           
+[PASS] T3.1 M2 was granted                           No starvation
+[PASS] T3.1 M1 write OKAY                            M1->S1
+[PASS] T3.1 M2 write OKAY                            M2->S2
+[PASS] T3.1 M1 readback                              Got=0xaa11aa11
+
+=== T3.2: TC_L3_HANDOVER ===
+    M1 writing, M2 requests mid-transfer
+[PASS] T3.2 M1 write completed first                 No interrupt
+[PASS] T3.2 M2 write after handover                  Grant switched
+[PASS] T3.2 S1 data intact                           Got=0xaaaa1111
+[PASS] T3.2 S2 data intact                           Got=0xbbbb2222
+
+=== T3.3: TC_L3_LOCKED_BURST ===
+    M1 locked INCR4 burst, M2 must NOT preempt
+[PASS] T3.3 No M2 grant during locked burst          HMASTLOCK enforced
+[PASS] T3.3 M1 locked burst OKAY                     4 beats
+[PASS] T3.3 M2 write after lock release              
+[PASS] T3.3 Beat[0]                                  Got=0xa0c00001
+[PASS] T3.3 Beat[3]                                  Got=0xa0c00004
+
+=== T3.4: TC_L3_SPLIT_SWITCH ===
+    M1 triggers SPLIT (addr=0x0), M2 takes bus, M1 resumes
+[PASS] T3.4 M1 lost grant (split-masked)             Arbiter masked M1
+[PASS] T3.4 M2 granted during M1 split               M2 took bus
+[PASS] T3.4 M1 SPLIT detected (ok=0)                 HRESP saw SPLIT
+[PASS] T3.4 M2 write during split OKAY               M2->S2 succeeded
+[PASS] T3.4 M1 write after SPLIT resume              M1 unmasked and operational
+
+=== T3.5: TC_L3_SPLIT_OR ===
+    Verify HSPLIT_COMBINED = S1|S2|S3 OR logic
+[PASS] T3.5 HSPLIT_S1[0] asserted                    Slave 1 SPLIT signal for M1
+
+=== T3.6: TC_L3_ADDR_MUX_SWITCH ===
+    Verify HADDR_S switches correctly between M1 and M2
+[PASS] T3.6 M1 write S1 OKAY                         
+[PASS] T3.6 M2 write S2 OKAY                         addr_ctrl_mux->M2
+[PASS] T3.6 S1 has M1 data                           Got=0x01add060
+[PASS] T3.6 S2 has M2 data                           Got=0x02add060
+
+=== T3.7: TC_L3_WDATA_MUX_PIPE ===
+    Verify write_data_mux pipeline delay during master switch
+[PASS] T3.7 M1 pipe write OKAY                       
+[PASS] T3.7 M2 pipe write OKAY                       master_sel_dp switched
+[PASS] T3.7 S1 got M1 data (not M2)                  Got=0xf1fe01d0
+[PASS] T3.7 S2 got M2 data (not M1)                  Got=0xf1fe02d0
+
+=== T3.8: TC_L3_M1_S1_M2_S2 ===
+    M1->S1, M2->S2 (sequential), verify no cross-contamination
+[PASS] T3.8 M1->S1 write OKAY                        
+[PASS] T3.8 M2->S2 write OKAY                        
+[PASS] T3.8 S1 data = M1 (no contamination)          Exp=0xAAAA8888 Got=0xaaaa8888
+[PASS] T3.8 S2 data = M2 (no contamination)          Exp=0xBBBB9999 Got=0xbbbb9999
+
+================================================================
+ LAYER 3 SIMULATION COMPLETE
+----------------------------------------------------------------
+ PASS : 32
+ FAIL : 0
+ TOTAL: 32
+ RESULT: *** ALL LAYER 3 TESTS PASSED ***
+================================================================

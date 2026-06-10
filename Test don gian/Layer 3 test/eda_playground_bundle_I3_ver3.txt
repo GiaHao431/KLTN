@@ -1,0 +1,1852 @@
+// =============================================================================
+//  AHB 2.0 Multi-Master Interconnect — Layer 3 System Test Bundle
+//  Single-file cho EDA Playground (Cadence Xcelium)
+//
+//  Top module: tb_ahb_interconnect_l3
+//
+//  ⚠️ ENCODING v2 đã áp dụng trong file này:
+//    Arbiter          : ST_GNT_M1→HMASTER=4'd0, ST_GNT_M2→HMASTER=4'd1
+//    ahb_addr_ctrl_mux: 4'd0→M1, 4'd1→M2, others→default(M1)
+//    ahb_write_data_mux: tương tự, pipeline reg [3:0]
+//    SPLIT_BIT_M1=0, SPLIT_BIT_M2=1
+//
+//  Bug fixes applied (L3-1..L3-8):
+//    L3-1: BFM module truncation fix
+//    L3-2: AHB_Slave SEED_VALUE parameter
+//    L3-3: AHB_Default_Slave port name mismatch
+//    L3-4: SPLIT_BIT encoding v2 alignment
+//    L3-5: Round-robin livelock (circular dependency)
+//    L3-6: Burst read Beat[0]=0 (BFM 4-phase fix, inherited from L2)
+//    L3-7: Idle-grant counter (T3.4 timeout fix, v2: 4-cycle threshold)
+//    L3-8: Burst protection (T3.3 mid-burst preemption fix)
+//    L3-9: BFM zero-gap grant→drive (fix ghost transfers / lost NONSEQ)
+//    L3-10: BFM request-when-needed (HBUSREQ deassert at end of transfer)
+//    L3-11: T3.4 canonical order (only M1 requests at start → SPLIT first)
+//
+//  Cách chạy trên EDA Playground:
+//    1. Paste toàn bộ file này vào ô Design
+//    2. Để trống ô Testbench
+//    3. Điền "tb_ahb_interconnect_l3" vào ô Top module
+//    4. Chọn Cadence Xcelium
+//    5. Nhấn Run
+// =============================================================================
+
+`timescale 1ns / 1ps
+
+// =============================================================================
+// MODULE 1: ahb_decoder
+// =============================================================================
+module ahb_decoder (
+    input  logic [31:0] HADDR_S,
+
+    output logic        HSEL_S1,
+    output logic        HSEL_S2,
+    output logic        HSEL_S3,
+    output logic        HSEL_DEFAULT,
+    output logic [1:0]  MUX_SEL
+);
+
+    always_comb begin
+        HSEL_S1      = 1'b0;
+        HSEL_S2      = 1'b0;
+        HSEL_S3      = 1'b0;
+        HSEL_DEFAULT = 1'b0;
+        MUX_SEL      = 2'b00;
+
+        case (HADDR_S[31:30])
+            2'b00: begin
+                HSEL_S1 = 1'b1;
+                MUX_SEL = 2'b00;
+            end
+            2'b01: begin
+                HSEL_S2 = 1'b1;
+                MUX_SEL = 2'b01;
+            end
+            2'b10: begin
+                HSEL_S3 = 1'b1;
+                MUX_SEL = 2'b10;
+            end
+            2'b11: begin
+                HSEL_DEFAULT = 1'b1;
+                MUX_SEL      = 2'b11;
+            end
+        endcase
+    end
+
+endmodule
+
+
+// =============================================================================
+// MODULE 2: ahb_addr_ctrl_mux  ★ ENCODING v2 ★
+//
+//  Quy ước HMASTER_SEL (USER-DEFINED, 0-based):
+//      4'd0 = Master 1 owns bus  (cả idle lẫn GNT_M1 đều = 0)
+//      4'd1 = Master 2 owns bus
+//      others → default → M1 (safe fallback)
+//
+//  Arbiter được sửa tương ứng: ST_GNT_M1→4'd0, ST_GNT_M2→4'd1, ST_IDLE→4'd0
+// =============================================================================
+module ahb_addr_ctrl_mux (
+    input  logic [3:0]  HMASTER_SEL,
+
+    input  logic [31:0] HADDR_M1,
+    input  logic [1:0]  HTRANS_M1,
+    input  logic        HWRITE_M1,
+    input  logic [2:0]  HSIZE_M1,
+    input  logic [2:0]  HBURST_M1,
+
+    input  logic [31:0] HADDR_M2,
+    input  logic [1:0]  HTRANS_M2,
+    input  logic        HWRITE_M2,
+    input  logic [2:0]  HSIZE_M2,
+    input  logic [2:0]  HBURST_M2,
+
+    output logic [31:0] HADDR_S,
+    output logic [1:0]  HTRANS_S,
+    output logic        HWRITE_S,
+    output logic [2:0]  HSIZE_S,
+    output logic [2:0]  HBURST_S
+);
+
+    always_comb begin
+        // Safe default: idle — drive M1 bus-idle values
+        HADDR_S  = HADDR_M1;
+        HTRANS_S = HTRANS_M1;
+        HWRITE_S = HWRITE_M1;
+        HSIZE_S  = HSIZE_M1;
+        HBURST_S = HBURST_M1;
+
+        if (HMASTER_SEL == 4'd0) begin          // 4'd0 → Master 1 (cả idle + GNT_M1)
+            HADDR_S  = HADDR_M1;
+            HTRANS_S = HTRANS_M1;
+            HWRITE_S = HWRITE_M1;
+            HSIZE_S  = HSIZE_M1;
+            HBURST_S = HBURST_M1;
+        end else if (HMASTER_SEL == 4'd1) begin // 4'd1 → Master 2
+            HADDR_S  = HADDR_M2;
+            HTRANS_S = HTRANS_M2;
+            HWRITE_S = HWRITE_M2;
+            HSIZE_S  = HSIZE_M2;
+            HBURST_S = HBURST_M2;
+        end
+        // else: illegal/unknown → retains safe default (M1) — no latch
+    end
+
+endmodule : ahb_addr_ctrl_mux
+
+
+// =============================================================================
+// MODULE 3: ahb_write_data_mux  ★ ENCODING v2: 0→M1, 1→M2 ★
+// =============================================================================
+module ahb_write_data_mux (
+    input  logic        HCLK,
+    input  logic        HRESETn,
+    input  logic        HREADY,
+
+    input  logic [3:0]  HMASTER_SEL,
+
+    input  logic [31:0] HWDATA_M1,
+    input  logic [31:0] HWDATA_M2,
+
+    output logic [31:0] HWDATA_S
+);
+
+    logic [3:0] master_sel_data_phase;
+
+    always_ff @(posedge HCLK or negedge HRESETn) begin
+        if (!HRESETn)
+            master_sel_data_phase <= 4'd0;
+        else if (HREADY)
+            master_sel_data_phase <= HMASTER_SEL;
+    end
+
+    always_comb begin
+        HWDATA_S = HWDATA_M1;   // safe default
+
+        if (master_sel_data_phase == 4'd0)       // 4'd0 → M1 (idle + GNT_M1)
+            HWDATA_S = HWDATA_M1;
+        else if (master_sel_data_phase == 4'd1)  // 4'd1 → M2
+            HWDATA_S = HWDATA_M2;
+    end
+
+endmodule : ahb_write_data_mux
+
+
+// =============================================================================
+// MODULE 4: ahb_read_data_mux
+// =============================================================================
+module ahb_read_data_mux (
+    input  logic        HCLK,
+    input  logic        HRESETn,
+    input  logic        HREADY,
+
+    input  logic [1:0]  MUX_SEL,
+
+    input  logic [31:0] HRDATA_S1,
+    input  logic [31:0] HRDATA_S2,
+    input  logic [31:0] HRDATA_S3,
+
+    output logic [31:0] HRDATA_M
+);
+
+    logic [1:0] mux_sel_data_phase;
+
+    always_ff @(posedge HCLK or negedge HRESETn) begin
+        if (!HRESETn)
+            mux_sel_data_phase <= 2'b00;
+        else if (HREADY)
+            mux_sel_data_phase <= MUX_SEL;
+    end
+
+    always_comb begin
+        case (mux_sel_data_phase)
+            2'b00:   HRDATA_M = HRDATA_S1;
+            2'b01:   HRDATA_M = HRDATA_S2;
+            2'b10:   HRDATA_M = HRDATA_S3;
+            2'b11:   HRDATA_M = 32'h0000_0000;
+            default: HRDATA_M = 32'h0000_0000;
+        endcase
+    end
+
+endmodule
+
+
+// =============================================================================
+// MODULE 5: ahb_resp_mux
+// =============================================================================
+module ahb_resp_mux (
+    input  logic        HCLK,
+    input  logic        HRESETn,
+    input  logic        HREADY,
+
+    input  logic [1:0]  MUX_SEL,
+
+    input  logic [1:0]  HRESP_S1,
+    input  logic [1:0]  HRESP_S2,
+    input  logic [1:0]  HRESP_S3,
+    input  logic [1:0]  HRESP_DEFAULT,
+
+    output logic [1:0]  HRESP_M
+);
+
+    logic [1:0] mux_sel_data_phase;
+
+    always_ff @(posedge HCLK or negedge HRESETn) begin
+        if (!HRESETn)
+            mux_sel_data_phase <= 2'b00;
+        else if (HREADY)
+            mux_sel_data_phase <= MUX_SEL;
+    end
+
+    always_comb begin
+        case (mux_sel_data_phase)
+            2'b00:   HRESP_M = HRESP_S1;
+            2'b01:   HRESP_M = HRESP_S2;
+            2'b10:   HRESP_M = HRESP_S3;
+            2'b11:   HRESP_M = HRESP_DEFAULT;
+            default: HRESP_M = 2'b00;
+        endcase
+    end
+
+endmodule
+
+
+// =============================================================================
+// MODULE 6: ahb_ready_mux
+// =============================================================================
+module ahb_ready_mux (
+    input  logic        HCLK,
+    input  logic        HRESETn,
+    input  logic        HREADY,
+
+    input  logic [1:0]  MUX_SEL,
+
+    input  logic        HREADYOUT_S1,
+    input  logic        HREADYOUT_S2,
+    input  logic        HREADYOUT_S3,
+    input  logic        HREADYOUT_DEFAULT,
+
+    output logic        HREADY_GLOBAL
+);
+
+    logic [1:0] mux_sel_data_phase;
+
+    always_ff @(posedge HCLK or negedge HRESETn) begin
+        if (!HRESETn)
+            mux_sel_data_phase <= 2'b00;
+        else if (HREADY)
+            mux_sel_data_phase <= MUX_SEL;
+    end
+
+    always_comb begin
+        case (mux_sel_data_phase)
+            2'b00:   HREADY_GLOBAL = HREADYOUT_S1;
+            2'b01:   HREADY_GLOBAL = HREADYOUT_S2;
+            2'b10:   HREADY_GLOBAL = HREADYOUT_S3;
+            2'b11:   HREADY_GLOBAL = HREADYOUT_DEFAULT;
+            default: HREADY_GLOBAL = 1'b1;
+        endcase
+    end
+
+endmodule
+
+
+// =============================================================================
+// MODULE 7: AHB_Arbiter
+// =============================================================================
+module AHB_Arbiter (
+    input  logic        HCLK,
+    input  logic        HRESETn,
+
+    input  logic        HBUSREQ_M1,
+    input  logic        HBUSREQ_M2,
+    input  logic        HLOCK_M1,
+    input  logic        HLOCK_M2,
+
+    input  logic [1:0]  HTRANS_S,
+    input  logic [2:0]  HBURST_S,
+    input  logic        HREADY,
+    input  logic [1:0]  HRESP_S,
+
+    input  logic [15:0] HSPLIT_COMBINED,
+
+    output logic        HGRANT_M1,
+    output logic        HGRANT_M2,
+    output logic [3:0]  HMASTER,
+    output logic        HMASTLOCK
+);
+
+    localparam logic [1:0] RESP_OKAY  = 2'b00;
+    localparam logic [1:0] RESP_ERROR = 2'b01;
+    localparam logic [1:0] RESP_RETRY = 2'b10;
+    localparam logic [1:0] RESP_SPLIT = 2'b11;
+
+    localparam int unsigned SPLIT_BIT_M1 = 0;  // v2: HMASTER=0 for M1
+    localparam int unsigned SPLIT_BIT_M2 = 1;  // v2: HMASTER=1 for M2
+
+    typedef enum logic [1:0] {
+        ST_IDLE   = 2'b00,
+        ST_GNT_M1 = 2'b01,
+        ST_GNT_M2 = 2'b10
+    } arb_state_e;
+
+    arb_state_e  state_q;
+    logic [1:0]  last_master_q;
+    logic        split_mask_m1_q;
+    logic        split_mask_m2_q;
+
+    arb_state_e  state_d;
+    logic        eff_req_m1;
+    logic        eff_req_m2;
+    logic        split_confirmed;
+
+    // ── FIX L3-7v2: Idle-grant counter (replaces premature grant_settled) ──
+    //    Arbiter chỉ switch khi master idle >= 4 cycle liên tiếp.
+    //    Tránh toggling mỗi 1-2 cycle gây mất transfer + corrupt pipeline.
+    arb_state_e  prev_state_q;
+    logic [2:0]  idle_grant_cnt;
+    logic        idle_force_switch;
+
+    // ── FIX L3-8: Burst protection (prevents mid-burst preemption) ──
+    logic        burst_active;
+    logic [5:0]  burst_remaining;
+
+    assign eff_req_m1 = HBUSREQ_M1 & ~split_mask_m1_q;
+    assign eff_req_m2 = HBUSREQ_M2 & ~split_mask_m2_q;
+    assign split_confirmed = (HRESP_S == RESP_SPLIT) & HREADY;
+
+    // idle_force_switch = 1 khi master được grant nhưng idle >= 4 cycle.
+    // Override round-robin để break deadlock. Threshold 4 đủ cho BFM
+    // drive NONSEQ (chỉ cần 2 cycle) mà không bị premature switch.
+    assign idle_force_switch = (idle_grant_cnt >= 3'd4);
+
+    always_comb begin : NEXT_STATE_PROC
+        state_d = state_q;
+
+        unique case (state_q)
+            ST_IDLE: begin
+                if (eff_req_m1 && (!eff_req_m2 || last_master_q == 2'd2))
+                    state_d = ST_GNT_M1;
+                else if (eff_req_m2 && (!eff_req_m1 || last_master_q == 2'd1))
+                    state_d = ST_GNT_M2;
+            end
+
+            ST_GNT_M1: begin
+                if (split_confirmed) begin
+                    state_d = eff_req_m2 ? ST_GNT_M2 : ST_IDLE;
+                end else if (HLOCK_M1 || burst_active) begin
+                    state_d = ST_GNT_M1;
+                end else if (HREADY) begin
+                    if (!eff_req_m1 && !eff_req_m2)
+                        state_d = ST_IDLE;
+                    else if (eff_req_m2 && (!eff_req_m1 || last_master_q == 2'd1 || idle_force_switch))
+                        state_d = ST_GNT_M2;
+                    else
+                        state_d = ST_GNT_M1;
+                end
+            end
+
+            ST_GNT_M2: begin
+                if (split_confirmed) begin
+                    state_d = eff_req_m1 ? ST_GNT_M1 : ST_IDLE;
+                end else if (HLOCK_M2 || burst_active) begin
+                    state_d = ST_GNT_M2;
+                end else if (HREADY) begin
+                    if (!eff_req_m1 && !eff_req_m2)
+                        state_d = ST_IDLE;
+                    else if (eff_req_m1 && (!eff_req_m2 || last_master_q == 2'd2 || idle_force_switch))
+                        state_d = ST_GNT_M1;
+                    else
+                        state_d = ST_GNT_M2;
+                end
+            end
+
+            default: state_d = ST_IDLE;
+        endcase
+    end : NEXT_STATE_PROC
+
+    always_ff @(posedge HCLK or negedge HRESETn) begin : SEQ_PROC
+        if (!HRESETn) begin
+            state_q         <= ST_IDLE;
+            last_master_q   <= 2'd2;
+            split_mask_m1_q <= 1'b0;
+            split_mask_m2_q <= 1'b0;
+        end else begin
+            state_q <= state_d;
+
+            // Round-robin: ghi nhận master hiện tại KHI nó thực hiện transfer
+            // (HTRANS_S != IDLE && HREADY = 1). KHÔNG update khi master idle.
+            // Deadlock prevention nằm ở idle_force_switch (NEXT_STATE_PROC),
+            // KHÔNG ở last_master_q — tránh premature update gây toggling.
+            if      (state_q == ST_GNT_M1 && HTRANS_S != 2'b00 && HREADY)
+                last_master_q <= 2'd1;
+            else if (state_q == ST_GNT_M2 && HTRANS_S != 2'b00 && HREADY)
+                last_master_q <= 2'd2;
+
+            if (HSPLIT_COMBINED[SPLIT_BIT_M1])
+                split_mask_m1_q <= 1'b0;
+            else if (state_q == ST_GNT_M1 && HRESP_S == RESP_SPLIT)
+                split_mask_m1_q <= 1'b1;
+
+            if (HSPLIT_COMBINED[SPLIT_BIT_M2])
+                split_mask_m2_q <= 1'b0;
+            else if (state_q == ST_GNT_M2 && HRESP_S == RESP_SPLIT)
+                split_mask_m2_q <= 1'b1;
+        end
+    end : SEQ_PROC
+
+    // ── FIX L3-7v2: Idle-Grant Counter ──────────────────────────────
+    //    Đếm số cycle liên tiếp mà master được grant nhưng idle (HTRANS=IDLE).
+    //    Reset khi: (a) có transfer active, (b) bus ở IDLE state, hoặc
+    //    (c) state vừa thay đổi (state_q ≠ prev_state_q).
+    //    Khi counter >= 4: idle_force_switch = 1 → override round-robin.
+    //    Threshold 4 cho BFM đủ thời gian drive NONSEQ (cần 2 cycle):
+    //      Cycle 0: State change, ensure_grant exit. Counter = 0.
+    //      Cycle 1: @posedge+#1 → BFM drives NONSEQ. Counter = 0 (state change detect).
+    //      Cycle 2: HTRANS_S = NONSEQ → counter reset. Không bao giờ đạt 4.
+    always_ff @(posedge HCLK or negedge HRESETn) begin : PREV_STATE_PROC
+        if (!HRESETn)
+            prev_state_q <= ST_IDLE;
+        else
+            prev_state_q <= state_q;
+    end : PREV_STATE_PROC
+
+    always_ff @(posedge HCLK or negedge HRESETn) begin : IDLE_GRANT_PROC
+        if (!HRESETn) begin
+            idle_grant_cnt <= 3'd0;
+        end else begin
+            if (HTRANS_S != 2'b00 || state_q == ST_IDLE || state_q != prev_state_q)
+                idle_grant_cnt <= 3'd0;
+            else if ((state_q == ST_GNT_M1 || state_q == ST_GNT_M2) &&
+                     HREADY && idle_grant_cnt < 3'd7)
+                idle_grant_cnt <= idle_grant_cnt + 3'd1;
+        end
+    end : IDLE_GRANT_PROC
+
+    // ── FIX L3-8: Burst Protection Tracking ─────────────────────────────
+    //    Theo AHB spec, fixed-length burst KHÔNG được preempt giữa chừng.
+    //    burst_active = 1 khi đang trong burst (INCR4/8/16, WRAP4/8/16).
+    //    burst_remaining đếm số beat còn lại (trừ beat NONSEQ đầu tiên).
+    //    SINGLE và INCR (undefined) KHÔNG được bảo vệ (có thể preempt).
+    always_ff @(posedge HCLK or negedge HRESETn) begin : BURST_TRACK_PROC
+        if (!HRESETn) begin
+            burst_active    <= 1'b0;
+            burst_remaining <= 6'd0;
+        end else if (HREADY) begin
+            if (HTRANS_S == 2'b10) begin                          // NONSEQ → new transfer
+                case (HBURST_S)
+                    3'b010, 3'b011: begin                          // WRAP4 / INCR4
+                        burst_active    <= 1'b1;
+                        burst_remaining <= 6'd3;
+                    end
+                    3'b100, 3'b101: begin                          // WRAP8 / INCR8
+                        burst_active    <= 1'b1;
+                        burst_remaining <= 6'd7;
+                    end
+                    3'b110, 3'b111: begin                          // WRAP16 / INCR16
+                        burst_active    <= 1'b1;
+                        burst_remaining <= 6'd15;
+                    end
+                    default: begin                                  // SINGLE / INCR
+                        burst_active    <= 1'b0;
+                        burst_remaining <= 6'd0;
+                    end
+                endcase
+            end else if (burst_active && HTRANS_S == 2'b11) begin  // SEQ → burst beat
+                if (burst_remaining <= 6'd1) begin
+                    burst_active    <= 1'b0;
+                    burst_remaining <= 6'd0;
+                end else begin
+                    burst_remaining <= burst_remaining - 6'd1;
+                end
+            end else if (burst_active && HTRANS_S == 2'b00) begin  // IDLE → early termination
+                burst_active    <= 1'b0;
+                burst_remaining <= 6'd0;
+            end
+            // BUSY (2'b01) during burst → no action, keep protecting
+        end
+    end : BURST_TRACK_PROC
+
+    always_comb begin : OUTPUT_PROC
+        HGRANT_M1 = 1'b0;
+        HGRANT_M2 = 1'b0;
+        HMASTER   = 4'd0;
+        HMASTLOCK = 1'b0;
+
+        unique case (state_q)
+            ST_GNT_M1: begin
+                HGRANT_M1 = 1'b1;
+                HGRANT_M2 = 1'b0;
+                HMASTER   = 4'd0;   // 0 = M1 owns bus (user encoding)
+                HMASTLOCK = HLOCK_M1;
+            end
+            ST_GNT_M2: begin
+                HGRANT_M1 = 1'b0;
+                HGRANT_M2 = 1'b1;
+                HMASTER   = 4'd1;   // 1 = M2 owns bus (user encoding)
+                HMASTLOCK = HLOCK_M2;
+            end
+            default: begin
+                HGRANT_M1 = 1'b0;
+                HGRANT_M2 = 1'b0;
+                HMASTER   = 4'd0;
+                HMASTLOCK = 1'b0;
+            end
+        endcase
+    end : OUTPUT_PROC
+
+endmodule : AHB_Arbiter
+
+
+// =============================================================================
+// MODULE 8: AHB_Slave
+// =============================================================================
+module AHB_Slave #(
+    parameter int SEED_VALUE = 10
+) (
+    input  logic        HCLK,
+    input  logic        HRESETn,
+    input  logic        HREADY_IN,
+    input  logic        HSELx,
+    input  logic [31:0] HADDR,
+    input  logic [1:0]  HTRANS,
+    input  logic        HWRITE,
+    input  logic [2:0]  HSIZE,
+    input  logic [2:0]  HBURST,
+    input  logic [31:0] HWDATA,
+    output logic [31:0] HRDATA,
+    input  logic [3:0]  HMASTER,
+    input  logic        HMASTLOCK,
+    output logic [15:0] HSPLITx,
+    output logic        HREADYOUT,
+    output logic [1:0]  HRESP
+);
+
+localparam logic [1:0]
+    T_IDLE   = 2'b00, T_BUSY   = 2'b01,
+    T_NONSEQ = 2'b10, T_SEQ    = 2'b11;
+
+localparam logic [1:0]
+    R_OKAY = 2'b00, R_ERROR = 2'b01,
+    R_RETRY = 2'b10, R_SPLIT = 2'b11;
+
+localparam logic [2:0]
+    B_SINGLE = 3'b000, B_INCR   = 3'b001,
+    B_WRAP4  = 3'b010, B_INCR4  = 3'b011,
+    B_WRAP8  = 3'b100, B_INCR8  = 3'b101,
+    B_WRAP16 = 3'b110, B_INCR16 = 3'b111;
+
+localparam logic [2:0]
+    ST_IDLE      = 3'b000, ST_ACTIVE    = 3'b001,
+    ST_AGAIN     = 3'b010, ST_LITTLE    = 3'b011,
+    ST_TIME_PASS = 3'b111,
+    ST_WBURST    = 3'b100, ST_RBURST    = 3'b101;
+
+logic [2:0] ps_slave, ns_slave;
+logic [7:0] local_addr, local_addr_base;
+logic       local_write;
+logic [2:0] local_burst, local_size;
+logic [5:0] beat_cnt;
+logic [3:0] split_master_reg;
+logic [31:0] memory_slave [0:255];
+
+initial begin : mem_init
+    for (int i = 0; i < 256; i++) memory_slave[i] = 32'd0;
+    memory_slave[0] = 32'(SEED_VALUE);
+    memory_slave[1] = 32'(SEED_VALUE * 2);
+    memory_slave[2] = 32'(SEED_VALUE * 3);
+end
+
+function automatic logic [7:0] next_burst_addr (
+    input logic [7:0] base, input logic [7:0] cur, input logic [2:0] burst
+);
+    logic [7:0] lin;
+    lin = cur + 8'h01;
+    case (burst)
+        B_WRAP4  : return {base[7:2], lin[1:0]};
+        B_WRAP8  : return {base[7:3], lin[2:0]};
+        B_WRAP16 : return {base[7:4], lin[3:0]};
+        default  : return lin;
+    endcase
+endfunction
+
+// SEQ BLOCK 1: State Register
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn) ps_slave <= ST_IDLE;
+    else          ps_slave <= ns_slave;
+end
+
+// SEQ BLOCK 2: Address-Phase Pipeline Latch
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn) begin
+        local_addr      <= 8'h00;
+        local_addr_base <= 8'h00;
+        local_write     <= 1'b0;
+        local_burst     <= B_SINGLE;
+        local_size      <= 3'b010;
+    end else begin
+        if (HSELx && HREADY_IN && (HTRANS == T_NONSEQ) &&
+            (ps_slave == ST_IDLE || ps_slave == ST_AGAIN)) begin
+            local_addr      <= HADDR[9:2];
+            local_addr_base <= HADDR[9:2];
+            local_write     <= HWRITE;
+            local_burst     <= HBURST;
+            local_size      <= HSIZE;
+        end
+        else if ((ps_slave == ST_WBURST || ps_slave == ST_RBURST) &&
+                  beat_cnt > 6'd1) begin
+            local_addr <= next_burst_addr(local_addr_base, local_addr, local_burst);
+        end
+    end
+end
+
+// SEQ BLOCK 3: Beat Counter
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn) begin
+        beat_cnt <= 6'd0;
+    end else begin
+        case (ps_slave)
+            ST_ACTIVE : begin
+                case (local_burst)
+                    B_SINGLE           : beat_cnt <= 6'd1;
+                    B_INCR             : beat_cnt <= 6'd32;
+                    B_WRAP4, B_INCR4   : beat_cnt <= 6'd4;
+                    B_WRAP8, B_INCR8   : beat_cnt <= 6'd8;
+                    B_WRAP16, B_INCR16 : beat_cnt <= 6'd16;
+                    default            : beat_cnt <= 6'd1;
+                endcase
+            end
+            ST_WBURST, ST_RBURST : begin
+                if (beat_cnt > 6'd0) beat_cnt <= beat_cnt - 6'd1;
+            end
+            default : ;
+        endcase
+    end
+end
+
+// SEQ BLOCK 4: SRAM Write
+always_ff @(posedge HCLK) begin
+    if (ps_slave == ST_WBURST)
+        memory_slave[local_addr] <= HWDATA;
+end
+
+// SEQ BLOCK 5: SPLIT Master-ID Latch
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn)
+        split_master_reg <= 4'h0;
+    else if (ps_slave == ST_RBURST && local_burst == B_SINGLE && local_addr == 8'h00)
+        split_master_reg <= HMASTER;
+end
+
+// COMB BLOCK: Next-State & Output Logic
+always_comb begin : fsm_comb
+    ns_slave  = ps_slave;
+    HREADYOUT = 1'b1;
+    HRESP     = R_OKAY;
+    HRDATA    = 32'h0000_0000;
+    HSPLITx   = 16'h0000;
+
+    case (ps_slave)
+
+        ST_IDLE : begin
+            HREADYOUT = 1'b1;
+            HRESP     = R_OKAY;
+            if (HSELx && HREADY_IN && (HTRANS == T_NONSEQ))
+                ns_slave = ST_ACTIVE;
+        end
+
+        ST_ACTIVE : begin
+            HREADYOUT = 1'b0;
+            HRESP     = R_OKAY;
+            ns_slave  = local_write ? ST_WBURST : ST_RBURST;
+        end
+
+        ST_AGAIN : begin
+            HREADYOUT = 1'b0;
+            HRESP     = R_RETRY;
+            ns_slave  = ST_ACTIVE;
+        end
+
+        ST_WBURST : begin
+            HRESP = R_OKAY;
+            case (local_burst)
+                B_SINGLE : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = ST_IDLE;
+                end
+                B_INCR, B_WRAP4, B_INCR4, B_WRAP8, B_INCR8, B_WRAP16, B_INCR16 : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_WBURST;
+                end
+                default : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = ST_IDLE;
+                end
+            endcase
+        end
+
+        ST_RBURST : begin
+            HRDATA = memory_slave[local_addr];
+            case (local_burst)
+                B_SINGLE : begin
+                    if (local_addr == 8'h00) begin
+                        HREADYOUT = 1'b0;
+                        HRESP     = R_SPLIT;
+                        HRDATA    = 32'h0000_0000;
+                        ns_slave  = ST_LITTLE;
+                    end else begin
+                        HREADYOUT = 1'b1;
+                        HRESP     = R_OKAY;
+                        ns_slave  = ST_IDLE;
+                    end
+                end
+                B_INCR, B_WRAP4, B_INCR4, B_WRAP8, B_INCR8, B_WRAP16, B_INCR16 : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_RBURST;
+                end
+                default : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = ST_IDLE;
+                end
+            endcase
+        end
+
+        ST_LITTLE : begin
+            HREADYOUT = 1'b1;
+            HRESP     = R_SPLIT;
+            if (!HMASTLOCK) begin
+                HSPLITx  = 16'h0001 << split_master_reg;
+                ns_slave = ST_IDLE;
+            end else begin
+                HSPLITx  = 16'h0000;
+                ns_slave = ST_TIME_PASS;
+            end
+        end
+
+        ST_TIME_PASS : begin
+            HREADYOUT = 1'b1;
+            HRESP     = R_OKAY;
+            if (!HMASTLOCK) begin
+                HSPLITx  = 16'h0001 << split_master_reg;
+                ns_slave = ST_IDLE;
+            end else begin
+                HSPLITx  = 16'h0000;
+                ns_slave = ST_TIME_PASS;
+            end
+        end
+
+        default : begin
+            ns_slave  = ST_IDLE;
+            HREADYOUT = 1'b1;
+            HRESP     = R_OKAY;
+        end
+
+    endcase
+end : fsm_comb
+
+endmodule
+
+
+// =============================================================================
+// MODULE 9: AHB_Default_Slave
+// =============================================================================
+module AHB_Default_Slave (
+    input  logic        HCLK,
+    input  logic        HRESETn,
+    input  logic        HSEL_DEFAULT,
+    input  logic [1:0]  HTRANS,
+    output logic        HREADYOUT_DEFAULT,
+    output logic [1:0]  HRESP_DEFAULT
+);
+
+localparam logic [1:0]
+    T_IDLE = 2'b00, T_BUSY = 2'b01,
+    T_NONSEQ = 2'b10, T_SEQ = 2'b11;
+
+localparam logic [1:0]
+    R_OKAY = 2'b00, R_ERROR = 2'b01;
+
+typedef enum logic [1:0] {
+    ST_IDLE       = 2'b00,
+    ST_ERROR_CYC1 = 2'b01,
+    ST_ERROR_CYC2 = 2'b10
+} ahb_def_state_t;
+
+ahb_def_state_t ps, ns;
+
+logic active_transfer;
+assign active_transfer = HSEL_DEFAULT &&
+                         (HTRANS == T_NONSEQ || HTRANS == T_SEQ);
+
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn) ps <= ST_IDLE;
+    else          ps <= ns;
+end
+
+always_comb begin : fsm_comb
+    ns                 = ps;
+    HREADYOUT_DEFAULT  = 1'b1;
+    HRESP_DEFAULT      = R_OKAY;
+
+    case (ps)
+        ST_IDLE : begin
+            HREADYOUT_DEFAULT = 1'b1;
+            HRESP_DEFAULT     = R_OKAY;
+            if (active_transfer)
+                ns = ST_ERROR_CYC1;
+            else
+                ns = ST_IDLE;
+        end
+        ST_ERROR_CYC1 : begin
+            HREADYOUT_DEFAULT = 1'b0;
+            HRESP_DEFAULT     = R_ERROR;
+            ns                = ST_ERROR_CYC2;
+        end
+        ST_ERROR_CYC2 : begin
+            HREADYOUT_DEFAULT = 1'b1;
+            HRESP_DEFAULT     = R_ERROR;
+            ns                = ST_IDLE;
+        end
+        default : begin
+            HREADYOUT_DEFAULT = 1'b1;
+            HRESP_DEFAULT     = R_OKAY;
+            ns                = ST_IDLE;
+        end
+    endcase
+end : fsm_comb
+
+endmodule
+
+
+// =============================================================================
+// MODULE 10: AHB_Interconnect (Top Integration Module)
+// =============================================================================
+module AHB_Interconnect (
+    input  wire        HCLK,
+    input  wire        HRESETn,
+
+    // Master 1
+    input  wire        HBUSREQ_M1,
+    input  wire        HLOCK_M1,
+    input  wire [31:0] HADDR_M1,
+    input  wire [31:0] HWDATA_M1,
+    input  wire [1:0]  HTRANS_M1,
+    input  wire        HWRITE_M1,
+    input  wire [2:0]  HSIZE_M1,
+    input  wire [2:0]  HBURST_M1,
+    output wire        HGRANT_M1,
+
+    // Master 2
+    input  wire        HBUSREQ_M2,
+    input  wire        HLOCK_M2,
+    input  wire [31:0] HADDR_M2,
+    input  wire [31:0] HWDATA_M2,
+    input  wire [1:0]  HTRANS_M2,
+    input  wire        HWRITE_M2,
+    input  wire [2:0]  HSIZE_M2,
+    input  wire [2:0]  HBURST_M2,
+    output wire        HGRANT_M2,
+
+    // Shared Master Feedback
+    output wire [31:0] HRDATA_M,
+    output wire [1:0]  HRESP_M,
+    output wire        HREADY,
+    output wire        HREADY_GLOBAL,
+
+    // Slave Broadcast
+    output wire [31:0] HADDR_S,
+    output wire [31:0] HWDATA_S,
+    output wire [1:0]  HTRANS_S,
+    output wire        HWRITE_S,
+    output wire [2:0]  HSIZE_S,
+    output wire [2:0]  HBURST_S,
+    output wire [3:0]  HMASTER,
+    output wire        HMASTLOCK,
+
+    // Slave Selects
+    output wire        HSEL_S1,
+    output wire        HSEL_S2,
+    output wire        HSEL_S3,
+    output wire        HSEL_DEFAULT,
+
+    // Slave 1 Feedback
+    input  wire [31:0] HRDATA_S1,
+    input  wire [1:0]  HRESP_S1,
+    input  wire        HREADYOUT_S1,
+    input  wire [15:0] HSPLIT_S1,
+
+    // Slave 2 Feedback
+    input  wire [31:0] HRDATA_S2,
+    input  wire [1:0]  HRESP_S2,
+    input  wire        HREADYOUT_S2,
+    input  wire [15:0] HSPLIT_S2,
+
+    // Slave 3 Feedback
+    input  wire [31:0] HRDATA_S3,
+    input  wire [1:0]  HRESP_S3,
+    input  wire        HREADYOUT_S3,
+    input  wire [15:0] HSPLIT_S3,
+
+    // Default Slave Feedback
+    input  wire        HREADYOUT_DEFAULT,
+    input  wire [1:0]  HRESP_DEFAULT
+);
+
+    wire [1:0]  MUX_SEL;
+    wire [15:0] HSPLIT_COMBINED;
+
+    assign HREADY = HREADY_GLOBAL;
+    assign HSPLIT_COMBINED = HSPLIT_S1 | HSPLIT_S2 | HSPLIT_S3;
+
+    AHB_Arbiter u_arbiter (
+        .HCLK             (HCLK),
+        .HRESETn          (HRESETn),
+        .HBUSREQ_M1       (HBUSREQ_M1),
+        .HBUSREQ_M2       (HBUSREQ_M2),
+        .HLOCK_M1         (HLOCK_M1),
+        .HLOCK_M2         (HLOCK_M2),
+        .HTRANS_S         (HTRANS_S),
+        .HBURST_S         (HBURST_S),
+        .HREADY           (HREADY_GLOBAL),
+        .HRESP_S          (HRESP_M),
+        .HSPLIT_COMBINED  (HSPLIT_COMBINED),
+        .HGRANT_M1        (HGRANT_M1),
+        .HGRANT_M2        (HGRANT_M2),
+        .HMASTER          (HMASTER),
+        .HMASTLOCK        (HMASTLOCK)
+    );
+
+    ahb_decoder u_decoder (
+        .HADDR_S          (HADDR_S),
+        .HSEL_S1          (HSEL_S1),
+        .HSEL_S2          (HSEL_S2),
+        .HSEL_S3          (HSEL_S3),
+        .HSEL_DEFAULT     (HSEL_DEFAULT),
+        .MUX_SEL          (MUX_SEL)
+    );
+
+    ahb_addr_ctrl_mux u_addr_ctrl_mux (
+        .HMASTER_SEL      (HMASTER),
+        .HADDR_M1         (HADDR_M1),
+        .HTRANS_M1        (HTRANS_M1),
+        .HWRITE_M1        (HWRITE_M1),
+        .HSIZE_M1         (HSIZE_M1),
+        .HBURST_M1        (HBURST_M1),
+        .HADDR_M2         (HADDR_M2),
+        .HTRANS_M2        (HTRANS_M2),
+        .HWRITE_M2        (HWRITE_M2),
+        .HSIZE_M2         (HSIZE_M2),
+        .HBURST_M2        (HBURST_M2),
+        .HADDR_S          (HADDR_S),
+        .HTRANS_S         (HTRANS_S),
+        .HWRITE_S         (HWRITE_S),
+        .HSIZE_S          (HSIZE_S),
+        .HBURST_S         (HBURST_S)
+    );
+
+    ahb_write_data_mux u_write_data_mux (
+        .HCLK             (HCLK),
+        .HRESETn          (HRESETn),
+        .HREADY           (HREADY_GLOBAL),
+        .HMASTER_SEL      (HMASTER),
+        .HWDATA_M1        (HWDATA_M1),
+        .HWDATA_M2        (HWDATA_M2),
+        .HWDATA_S         (HWDATA_S)
+    );
+
+    ahb_read_data_mux u_read_data_mux (
+        .HCLK             (HCLK),
+        .HRESETn          (HRESETn),
+        .HREADY           (HREADY_GLOBAL),
+        .MUX_SEL          (MUX_SEL),
+        .HRDATA_S1        (HRDATA_S1),
+        .HRDATA_S2        (HRDATA_S2),
+        .HRDATA_S3        (HRDATA_S3),
+        .HRDATA_M         (HRDATA_M)
+    );
+
+    ahb_resp_mux u_resp_mux (
+        .HCLK             (HCLK),
+        .HRESETn          (HRESETn),
+        .HREADY           (HREADY_GLOBAL),
+        .MUX_SEL          (MUX_SEL),
+        .HRESP_S1         (HRESP_S1),
+        .HRESP_S2         (HRESP_S2),
+        .HRESP_S3         (HRESP_S3),
+        .HRESP_DEFAULT    (HRESP_DEFAULT),
+        .HRESP_M          (HRESP_M)
+    );
+
+    ahb_ready_mux u_ready_mux (
+        .HCLK              (HCLK),
+        .HRESETn           (HRESETn),
+        .HREADY            (HREADY_GLOBAL),
+        .MUX_SEL           (MUX_SEL),
+        .HREADYOUT_S1      (HREADYOUT_S1),
+        .HREADYOUT_S2      (HREADYOUT_S2),
+        .HREADYOUT_S3      (HREADYOUT_S3),
+        .HREADYOUT_DEFAULT (HREADYOUT_DEFAULT),
+        .HREADY_GLOBAL     (HREADY_GLOBAL)
+    );
+
+endmodule : AHB_Interconnect
+
+
+// =============================================================================
+// MODULE 11: ahb_master_bfm_l2  (Layer 2 BFM)
+// =============================================================================
+
+`define T_IDLE   2'b00
+`define T_BUSY   2'b01
+`define T_NONSEQ 2'b10
+`define T_SEQ    2'b11
+
+`define B_SINGLE 3'b000
+`define B_INCR   3'b001
+`define B_WRAP4  3'b010
+`define B_INCR4  3'b011
+
+`define R_OKAY   2'b00
+`define R_ERROR  2'b01
+`define R_RETRY  2'b10
+`define R_SPLIT  2'b11
+
+`define SZ_WORD  3'b010
+
+module ahb_master_bfm_l2 (
+    input  logic        HCLK,
+    output logic        HRESETn,
+
+    output logic        HBUSREQ,
+    output logic        HLOCK,
+    input  logic        HGRANT,
+
+    output logic [31:0] HADDR,
+    output logic [1:0]  HTRANS,
+    output logic        HWRITE,
+    output logic [2:0]  HSIZE,
+    output logic [2:0]  HBURST,
+
+    output logic [31:0] HWDATA,
+    input  logic [31:0] HRDATA,
+
+    input  logic        HREADY,
+    input  logic [1:0]  HRESP
+);
+
+    initial begin
+        HRESETn  = 1'b1;
+        HBUSREQ  = 1'b0;
+        HLOCK    = 1'b0;
+        HADDR    = 32'h0;
+        HTRANS   = `T_IDLE;
+        HWRITE   = 1'b0;
+        HSIZE    = `SZ_WORD;
+        HBURST   = `B_SINGLE;
+        HWDATA   = 32'h0;
+    end
+
+    task automatic ahb_reset(input int cycles = 5);
+        HRESETn = 1'b0;
+        HBUSREQ = 1'b0;
+        HLOCK   = 1'b0;
+        HADDR   = 32'h0;
+        HTRANS  = `T_IDLE;
+        HWRITE  = 1'b0;
+        HWDATA  = 32'h0;
+        repeat (cycles) @(posedge HCLK);
+        #1;
+        HRESETn = 1'b1;
+        @(posedge HCLK);
+    endtask
+
+    task automatic ahb_idle();
+        @(posedge HCLK); #1;
+        HTRANS = `T_IDLE;
+        HADDR  = 32'h0;
+    endtask
+
+    // ── FIX L3-9: Zero-gap grant acquisition ──────────────────────────
+    //  Lỗi cũ: exit tại posedge (đọc HGRANT pre-NBA → stale), rồi caller
+    //  chờ THÊM 1 posedge nữa mới drive NONSEQ → 1 cycle gap "granted
+    //  nhưng idle" → arbiter có thể switch trong gap → NONSEQ bị mất
+    //  (ghost transfer: BFM drive khi HGRANT=0).
+    //  Fix: sample HGRANT tại #1 SAU posedge (post-NBA, giá trị đã chốt),
+    //  exit ngay tại #1 → caller drive NONSEQ NGAY trong cùng cycle đó.
+    task automatic ensure_grant();
+        HBUSREQ = 1'b1;
+        forever begin
+            @(posedge HCLK);
+            #1;
+            if (HGRANT) break;
+        end
+    endtask
+
+    task automatic ahb_write_single(
+        input  logic [31:0] addr,
+        input  logic [31:0] data,
+        ref    logic        ok
+    );
+        ensure_grant();           // exit tại #1 sau posedge có HGRANT=1
+
+        // Drive NONSEQ NGAY — không có gap cycle (FIX L3-9)
+        HADDR  = addr;
+        HTRANS = `T_NONSEQ;
+        HWRITE = 1'b1;
+        HSIZE  = `SZ_WORD;
+        HBURST = `B_SINGLE;
+
+        @(posedge HCLK);
+        while (!HREADY) @(posedge HCLK);
+        #1;
+
+        HWDATA = data;
+        HTRANS = `T_IDLE;
+
+        @(posedge HCLK);
+        while (!HREADY) @(posedge HCLK);
+
+        ok = (HRESP == `R_OKAY) ? 1'b1 : 1'b0;
+
+        #1;
+        HWRITE  = 1'b0;
+        HWDATA  = 32'h0;
+        HADDR   = 32'h0;          // clear stale address (FIX L3-10)
+        HBUSREQ = 1'b0;           // request-when-needed (FIX L3-10)
+    endtask
+
+    task automatic ahb_read_single(
+        input  logic [31:0] addr,
+        ref    logic [31:0] data,
+        ref    logic        ok
+    );
+        ensure_grant();           // exit tại #1 sau posedge có HGRANT=1
+
+        // Drive NONSEQ NGAY — không có gap cycle (FIX L3-9)
+        HADDR  = addr;
+        HTRANS = `T_NONSEQ;
+        HWRITE = 1'b0;
+        HSIZE  = `SZ_WORD;
+        HBURST = `B_SINGLE;
+
+        @(posedge HCLK);
+        while (!HREADY) @(posedge HCLK);
+        #1;
+        HTRANS = `T_IDLE;
+
+        @(posedge HCLK);
+        while (!HREADY) @(posedge HCLK);
+
+        data = HRDATA;
+        ok   = (HRESP == `R_OKAY) ? 1'b1 : 1'b0;
+        #1;
+        HADDR   = 32'h0;          // clear stale address (FIX L3-10)
+        HBUSREQ = 1'b0;           // request-when-needed (FIX L3-10)
+    endtask
+
+    task automatic ahb_write_burst_incr4(
+        input  logic [31:0] base_addr,
+        input  logic [31:0] wdata [0:3],
+        ref    logic        ok
+    );
+        logic [31:0] cur_addr;
+        ok = 1'b1;
+        ensure_grant();           // exit tại #1 sau posedge có HGRANT=1
+
+        // Drive NONSEQ NGAY — không có gap cycle (FIX L3-9)
+        HADDR    = base_addr;
+        HTRANS   = `T_NONSEQ;
+        HWRITE   = 1'b1;
+        HSIZE    = `SZ_WORD;
+        HBURST   = `B_INCR4;
+        cur_addr = base_addr;
+
+        for (int i = 0; i < 3; i++) begin
+            @(posedge HCLK);
+            while (!HREADY) @(posedge HCLK);
+            #1;
+            HWDATA   = wdata[i];
+            cur_addr = cur_addr + 32'd4;
+            HADDR    = cur_addr;
+            HTRANS   = `T_SEQ;
+            if (HRESP != `R_OKAY) ok = 1'b0;
+        end
+
+        @(posedge HCLK);
+        while (!HREADY) @(posedge HCLK);
+        #1;
+        HWDATA = wdata[3];
+        HTRANS = `T_IDLE;
+        HADDR  = 32'h0;
+        if (HRESP != `R_OKAY) ok = 1'b0;
+
+        @(posedge HCLK);
+        while (!HREADY) @(posedge HCLK);
+        if (HRESP != `R_OKAY) ok = 1'b0;
+
+        #1;
+        HWRITE  = 1'b0;
+        HWDATA  = 32'h0;
+        HBUSREQ = 1'b0;           // request-when-needed (FIX L3-10)
+    endtask
+
+    task automatic ahb_read_burst_incr4(
+        input  logic [31:0] base_addr,
+        ref    logic [31:0] rdata [0:3],
+        ref    logic        ok
+    );
+        logic [31:0] cur_addr;
+        ok = 1'b1;
+        ensure_grant();           // exit tại #1 sau posedge có HGRANT=1
+
+        // ── Phase 1: Drive NONSEQ for beat 0 NGAY — không gap (FIX L3-9) ──
+        HADDR    = base_addr;
+        HTRANS   = `T_NONSEQ;
+        HWRITE   = 1'b0;
+        HSIZE    = `SZ_WORD;
+        HBURST   = `B_INCR4;
+        cur_addr = base_addr;
+
+        // ── Phase 2: AP accepted — drive SEQ for beat 1 ───────────────
+        //    Tại posedge này, HREADY=1 (pre-NBA) → AP beat 0 được chấp nhận.
+        //    Slave chuyển ST_ACTIVE (NBA) → HREADYOUT=0 (wait-state).
+        //    Chưa capture data — chỉ drive address beat tiếp theo.
+        @(posedge HCLK);
+        while (!HREADY) @(posedge HCLK);
+        #1;
+        cur_addr = cur_addr + 32'd4;
+        HADDR    = cur_addr;
+        HTRANS   = `T_SEQ;
+
+        // ── Phase 3: Capture beats 0–2 + pipeline next address ────────
+        //    Mỗi iteration: while(!HREADY) chờ Slave trả data (xử lý
+        //    wait-state nếu có), rồi capture HRDATA tại active region
+        //    (TRƯỚC #1, để đọc giá trị pre-NBA chính xác).
+        for (int i = 0; i < 3; i++) begin
+            @(posedge HCLK);
+            while (!HREADY) @(posedge HCLK);
+            rdata[i] = HRDATA;                // ★ FIX: capture TRƯỚC #1
+            if (HRESP != `R_OKAY) ok = 1'b0;
+            #1;
+            if (i < 2) begin
+                cur_addr = cur_addr + 32'd4;
+                HADDR    = cur_addr;
+                HTRANS   = `T_SEQ;
+            end else begin
+                HTRANS   = `T_IDLE;
+                HADDR    = 32'h0;
+            end
+        end
+
+        // ── Phase 4: Capture beat 3 (last) ────────────────────────────
+        @(posedge HCLK);
+        while (!HREADY) @(posedge HCLK);
+        rdata[3] = HRDATA;                    // ★ FIX: capture tại active
+        if (HRESP != `R_OKAY) ok = 1'b0;
+
+        #1;
+        HBUSREQ = 1'b0;           // request-when-needed (FIX L3-10)
+    endtask
+
+endmodule : ahb_master_bfm_l2
+
+
+// =============================================================================
+// =============================================================================
+// MODULE 12: tb_ahb_interconnect_l3  (Layer 3 System Test — 2 Masters Active)
+// =============================================================================
+//  Test Cases:
+//    T3.1 - Round-Robin Grant          T3.5 - SPLIT Aggregation (OR)
+//    T3.2 - Bus Handover               T3.6 - addr_ctrl_mux Switch
+//    T3.3 - Locked Burst (HLOCK)       T3.7 - write_data_mux Pipeline
+//    T3.4 - SPLIT + Master Switch      T3.8 - Concurrent Access (M1->S1, M2->S2)
+//
+//  Bug fixes from L1/L2 applied:
+//    - v2 encoding: HMASTER 0=M1, 1=M2
+//    - SPLIT_BIT_M1=0, SPLIT_BIT_M2=1 (matches v2)
+//    - No repeat(3), 1 cycle sync after reset
+//    - Burst read: Phase 2 AP wait + capture HRDATA before #1
+//    - Slave ST_ACTIVE wait-state accounted for in all timing
+// =============================================================================
+module tb_ahb_interconnect_l3;
+
+    // -- Clock -----------------------------------------------
+    logic HCLK;
+    initial HCLK = 0;
+    always #5 HCLK = ~HCLK;
+
+    // -- Interconnect <-> BFM Wires --------------------------
+
+    // M1 BFM <-> Interconnect
+    logic        HBUSREQ_M1, HLOCK_M1, HGRANT_M1;
+    logic [31:0] HADDR_M1, HWDATA_M1;
+    logic [1:0]  HTRANS_M1;
+    logic        HWRITE_M1;
+    logic [2:0]  HSIZE_M1, HBURST_M1;
+
+    // M2 BFM <-> Interconnect
+    logic        HBUSREQ_M2, HLOCK_M2, HGRANT_M2;
+    logic [31:0] HADDR_M2, HWDATA_M2;
+    logic [1:0]  HTRANS_M2;
+    logic        HWRITE_M2;
+    logic [2:0]  HSIZE_M2, HBURST_M2;
+
+    // Shared (Interconnect -> both Masters)
+    logic [31:0] HRDATA_M;
+    logic [1:0]  HRESP_M;
+    logic        HREADY, HREADY_GLOBAL;
+
+    // Shared bus (Interconnect -> all Slaves)
+    logic [31:0] HADDR_S, HWDATA_S;
+    logic [1:0]  HTRANS_S;
+    logic        HWRITE_S;
+    logic [2:0]  HSIZE_S, HBURST_S;
+    logic [3:0]  HMASTER;
+    logic        HMASTLOCK;
+    logic        HSEL_S1, HSEL_S2, HSEL_S3, HSEL_DEFAULT;
+    logic [1:0]  MUX_SEL;
+
+    // Slave feedback -> Interconnect
+    logic [31:0] HRDATA_S1, HRDATA_S2, HRDATA_S3;
+    logic [1:0]  HRESP_S1, HRESP_S2, HRESP_S3;
+    logic        HREADYOUT_S1, HREADYOUT_S2, HREADYOUT_S3;
+    logic [15:0] HSPLIT_S1, HSPLIT_S2, HSPLIT_S3;
+    logic        HREADYOUT_DEFAULT;
+    logic [1:0]  HRESP_DEFAULT;
+
+    // M1 BFM's HRESETn output
+    logic HRESETn;
+
+    // -- BFM M1 Instance -------------------------------------
+    ahb_master_bfm_l2 u_bfm_m1 (
+        .HCLK    (HCLK),
+        .HRESETn (HRESETn),
+        .HBUSREQ (HBUSREQ_M1),
+        .HLOCK   (HLOCK_M1),
+        .HGRANT  (HGRANT_M1),
+        .HADDR   (HADDR_M1),
+        .HTRANS  (HTRANS_M1),
+        .HWRITE  (HWRITE_M1),
+        .HSIZE   (HSIZE_M1),
+        .HBURST  (HBURST_M1),
+        .HWDATA  (HWDATA_M1),
+        .HRDATA  (HRDATA_M),
+        .HREADY  (HREADY_GLOBAL),
+        .HRESP   (HRESP_M)
+    );
+
+    // -- BFM M2 Instance -------------------------------------
+    //    M2 BFM's HRESETn is OUTPUT -> tie to wire (M1 drives reset)
+    logic HRESETn_m2_unused;
+    ahb_master_bfm_l2 u_bfm_m2 (
+        .HCLK    (HCLK),
+        .HRESETn (HRESETn_m2_unused),
+        .HBUSREQ (HBUSREQ_M2),
+        .HLOCK   (HLOCK_M2),
+        .HGRANT  (HGRANT_M2),
+        .HADDR   (HADDR_M2),
+        .HTRANS  (HTRANS_M2),
+        .HWRITE  (HWRITE_M2),
+        .HSIZE   (HSIZE_M2),
+        .HBURST  (HBURST_M2),
+        .HWDATA  (HWDATA_M2),
+        .HRDATA  (HRDATA_M),
+        .HREADY  (HREADY_GLOBAL),
+        .HRESP   (HRESP_M)
+    );
+
+    // -- Interconnect ----------------------------------------
+    AHB_Interconnect u_intc (
+        .HCLK(HCLK), .HRESETn(HRESETn),
+        .HBUSREQ_M1(HBUSREQ_M1), .HLOCK_M1(HLOCK_M1),
+        .HADDR_M1(HADDR_M1), .HWDATA_M1(HWDATA_M1),
+        .HTRANS_M1(HTRANS_M1), .HWRITE_M1(HWRITE_M1),
+        .HSIZE_M1(HSIZE_M1), .HBURST_M1(HBURST_M1),
+        .HGRANT_M1(HGRANT_M1),
+        .HBUSREQ_M2(HBUSREQ_M2), .HLOCK_M2(HLOCK_M2),
+        .HADDR_M2(HADDR_M2), .HWDATA_M2(HWDATA_M2),
+        .HTRANS_M2(HTRANS_M2), .HWRITE_M2(HWRITE_M2),
+        .HSIZE_M2(HSIZE_M2), .HBURST_M2(HBURST_M2),
+        .HGRANT_M2(HGRANT_M2),
+        .HRDATA_M(HRDATA_M), .HRESP_M(HRESP_M),
+        .HREADY(HREADY), .HREADY_GLOBAL(HREADY_GLOBAL),
+        .HADDR_S(HADDR_S), .HWDATA_S(HWDATA_S),
+        .HTRANS_S(HTRANS_S), .HWRITE_S(HWRITE_S),
+        .HSIZE_S(HSIZE_S), .HBURST_S(HBURST_S),
+        .HMASTER(HMASTER), .HMASTLOCK(HMASTLOCK),
+        .HSEL_S1(HSEL_S1), .HSEL_S2(HSEL_S2),
+        .HSEL_S3(HSEL_S3), .HSEL_DEFAULT(HSEL_DEFAULT),
+        .HRDATA_S1(HRDATA_S1), .HRESP_S1(HRESP_S1),
+        .HREADYOUT_S1(HREADYOUT_S1), .HSPLIT_S1(HSPLIT_S1),
+        .HRDATA_S2(HRDATA_S2), .HRESP_S2(HRESP_S2),
+        .HREADYOUT_S2(HREADYOUT_S2), .HSPLIT_S2(HSPLIT_S2),
+        .HRDATA_S3(HRDATA_S3), .HRESP_S3(HRESP_S3),
+        .HREADYOUT_S3(HREADYOUT_S3), .HSPLIT_S3(HSPLIT_S3),
+        .HREADYOUT_DEFAULT(HREADYOUT_DEFAULT),
+        .HRESP_DEFAULT(HRESP_DEFAULT)
+    );
+
+    // -- 3 Slaves + Default Slave ----------------------------
+    AHB_Slave #(.SEED_VALUE(10)) u_slave1 (
+        .HCLK(HCLK), .HRESETn(HRESETn), .HREADY_IN(HREADY_GLOBAL),
+        .HSELx(HSEL_S1), .HADDR(HADDR_S), .HTRANS(HTRANS_S),
+        .HWRITE(HWRITE_S), .HSIZE(HSIZE_S), .HBURST(HBURST_S),
+        .HWDATA(HWDATA_S), .HRDATA(HRDATA_S1),
+        .HMASTER(HMASTER), .HMASTLOCK(HMASTLOCK),
+        .HSPLITx(HSPLIT_S1), .HREADYOUT(HREADYOUT_S1), .HRESP(HRESP_S1)
+    );
+    AHB_Slave #(.SEED_VALUE(20)) u_slave2 (
+        .HCLK(HCLK), .HRESETn(HRESETn), .HREADY_IN(HREADY_GLOBAL),
+        .HSELx(HSEL_S2), .HADDR(HADDR_S), .HTRANS(HTRANS_S),
+        .HWRITE(HWRITE_S), .HSIZE(HSIZE_S), .HBURST(HBURST_S),
+        .HWDATA(HWDATA_S), .HRDATA(HRDATA_S2),
+        .HMASTER(HMASTER), .HMASTLOCK(HMASTLOCK),
+        .HSPLITx(HSPLIT_S2), .HREADYOUT(HREADYOUT_S2), .HRESP(HRESP_S2)
+    );
+    AHB_Slave #(.SEED_VALUE(30)) u_slave3 (
+        .HCLK(HCLK), .HRESETn(HRESETn), .HREADY_IN(HREADY_GLOBAL),
+        .HSELx(HSEL_S3), .HADDR(HADDR_S), .HTRANS(HTRANS_S),
+        .HWRITE(HWRITE_S), .HSIZE(HSIZE_S), .HBURST(HBURST_S),
+        .HWDATA(HWDATA_S), .HRDATA(HRDATA_S3),
+        .HMASTER(HMASTER), .HMASTLOCK(HMASTLOCK),
+        .HSPLITx(HSPLIT_S3), .HREADYOUT(HREADYOUT_S3), .HRESP(HRESP_S3)
+    );
+    AHB_Default_Slave u_default_slave (
+        .HCLK(HCLK), .HRESETn(HRESETn),
+        .HTRANS(HTRANS_S), .HSEL_DEFAULT(HSEL_DEFAULT),
+        .HREADYOUT_DEFAULT(HREADYOUT_DEFAULT), .HRESP_DEFAULT(HRESP_DEFAULT)
+    );
+
+    // -- Scoreboard ------------------------------------------
+    int pass_count = 0;
+    int fail_count = 0;
+
+    task automatic check(
+        input string name,
+        input logic  cond,
+        input string msg
+    );
+        if (cond) begin
+            $display("[PASS] %-45s %s", name, msg);
+            pass_count++;
+        end else begin
+            $display("[FAIL] %-45s %s", name, msg);
+            fail_count++;
+        end
+    endtask
+
+    // -- VCD + Timeout ---------------------------------------
+    initial begin
+        $dumpfile("dump.vcd");
+        $dumpvars(0, tb_ahb_interconnect_l3);
+    end
+
+    initial begin
+        #200000;
+        $display("[TIMEOUT] 200us!");
+        $finish;
+    end
+
+    // -- Helper: Reset M2 BFM signals ------------------------
+    task automatic reset_m2_bfm();
+        u_bfm_m2.HBUSREQ = 1'b0;
+        u_bfm_m2.HLOCK   = 1'b0;
+        u_bfm_m2.HADDR   = 32'h0;
+        u_bfm_m2.HTRANS  = `T_IDLE;
+        u_bfm_m2.HWRITE  = 1'b0;
+        u_bfm_m2.HWDATA  = 32'h0;
+        u_bfm_m2.HSIZE   = `SZ_WORD;
+        u_bfm_m2.HBURST  = `B_SINGLE;
+    endtask
+
+    // -- Test Variables ---------------------------------------
+    logic        ok_m1, ok_m2;
+    logic [31:0] rdata_m1, rdata_m2;
+    logic [31:0] wdata_burst [0:3];
+    logic [31:0] rdata_burst [0:3];
+
+    // ========================================================
+    //  MAIN TEST SEQUENCE
+    // ========================================================
+    initial begin
+        $display("================================================================");
+        $display(" AHB Interconnect - Layer 3 System Test (2 Masters Active)");
+        $display(" Config: M1+M2, 3 Slaves, 1 Default Slave, v2 encoding");
+        $display("================================================================\n");
+
+        // -- Reset -------------------------------------------
+        $display("--- PHASE 0: System Reset ---");
+        reset_m2_bfm();
+        u_bfm_m1.ahb_reset(5);
+        @(posedge HCLK);
+        $display("    Reset done.\n");
+
+        // ============================================================
+        // T3.1 - TC_L3_ROUND_ROBIN
+        // ============================================================
+        $display("=== T3.1: TC_L3_ROUND_ROBIN ===");
+        $display("    M1+M2 request simultaneously, verify alternating grants");
+
+        fork
+            begin : m1_rr
+                u_bfm_m1.HBUSREQ = 1'b1;
+                u_bfm_m1.ahb_write_single(32'h0000_0010, 32'hAA11_AA11, ok_m1);
+            end
+            begin : m2_rr
+                u_bfm_m2.HBUSREQ = 1'b1;
+                u_bfm_m2.ahb_write_single(32'h4000_0010, 32'hBB22_BB22, ok_m2);
+            end
+            begin : rr_monitor
+                logic saw_m1, saw_m2;
+                saw_m1 = 0; saw_m2 = 0;
+                repeat (30) begin
+                    @(posedge HCLK);
+                    if (HGRANT_M1) saw_m1 = 1;
+                    if (HGRANT_M2) saw_m2 = 1;
+                end
+                check("T3.1 M1 was granted",   saw_m1, "");
+                check("T3.1 M2 was granted",   saw_m2, "No starvation");
+            end
+        join
+
+        check("T3.1 M1 write OKAY", ok_m1 == 1'b1, "M1->S1");
+        check("T3.1 M2 write OKAY", ok_m2 == 1'b1, "M2->S2");
+
+        // Verify data integrity
+        u_bfm_m1.ahb_read_single(32'h0000_0010, rdata_m1, ok_m1);
+        check("T3.1 M1 readback", rdata_m1 === 32'hAA11_AA11,
+              $sformatf("Got=0x%08X", rdata_m1));
+        u_bfm_m2.HBUSREQ = 1'b0;
+        u_bfm_m1.ahb_idle();
+        u_bfm_m1.ahb_idle();
+        $display("");
+
+        // ============================================================
+        // T3.2 - TC_L3_HANDOVER
+        // ============================================================
+        $display("=== T3.2: TC_L3_HANDOVER ===");
+        $display("    M1 writing, M2 requests mid-transfer");
+
+        u_bfm_m2.HBUSREQ = 1'b0;
+        fork
+            begin : m1_ho
+                u_bfm_m1.HBUSREQ = 1'b1;
+                u_bfm_m1.ahb_write_single(32'h0000_0020, 32'hAAAA_1111, ok_m1);
+            end
+            begin : m2_ho
+                repeat (2) @(posedge HCLK);
+                u_bfm_m2.HBUSREQ = 1'b1;
+                u_bfm_m2.ahb_write_single(32'h4000_0020, 32'hBBBB_2222, ok_m2);
+            end
+        join
+
+        check("T3.2 M1 write completed first", ok_m1 == 1'b1, "No interrupt");
+        check("T3.2 M2 write after handover",  ok_m2 == 1'b1, "Grant switched");
+
+        // Verify both writes landed correctly
+        u_bfm_m1.ahb_read_single(32'h0000_0020, rdata_m1, ok_m1);
+        check("T3.2 S1 data intact",
+              rdata_m1 === 32'hAAAA_1111, $sformatf("Got=0x%08X", rdata_m1));
+
+        u_bfm_m2.ahb_read_single(32'h4000_0020, rdata_m2, ok_m2);
+        check("T3.2 S2 data intact",
+              rdata_m2 === 32'hBBBB_2222, $sformatf("Got=0x%08X", rdata_m2));
+
+        u_bfm_m1.ahb_idle();
+        u_bfm_m2.ahb_idle();
+        u_bfm_m2.HBUSREQ = 1'b0;
+        u_bfm_m1.ahb_idle();
+        $display("");
+
+        // ============================================================
+        // T3.3 - TC_L3_LOCKED_BURST
+        // ============================================================
+        $display("=== T3.3: TC_L3_LOCKED_BURST ===");
+        $display("    M1 locked INCR4 burst, M2 must NOT preempt");
+
+        wdata_burst[0] = 32'hA0C0_0001;
+        wdata_burst[1] = 32'hA0C0_0002;
+        wdata_burst[2] = 32'hA0C0_0003;
+        wdata_burst[3] = 32'hA0C0_0004;
+
+        u_bfm_m1.HBUSREQ = 1'b1;
+        u_bfm_m2.HBUSREQ = 1'b1;
+        @(posedge HCLK);
+
+        fork
+            begin : m1_lock
+                u_bfm_m1.HLOCK = 1'b1;
+                u_bfm_m1.ahb_write_burst_incr4(32'h0000_0040, wdata_burst, ok_m1);
+                u_bfm_m1.HLOCK = 1'b0;
+            end
+            begin : lock_mon
+                logic lock_violated;
+                lock_violated = 0;
+                repeat (20) begin
+                    @(posedge HCLK);
+                    if (HMASTLOCK === 1'b1 && HGRANT_M2 === 1'b1)
+                        lock_violated = 1;
+                end
+                check("T3.3 No M2 grant during locked burst",
+                      !lock_violated, "HMASTLOCK enforced");
+            end
+        join
+
+        check("T3.3 M1 locked burst OKAY", ok_m1 == 1'b1, "4 beats");
+
+        // After lock released, M2 can use bus
+        u_bfm_m2.ahb_write_single(32'h4000_0030, 32'h3333_3333, ok_m2);
+        check("T3.3 M2 write after lock release", ok_m2 == 1'b1, "");
+
+        // Verify locked burst data
+        u_bfm_m1.ahb_read_burst_incr4(32'h0000_0040, rdata_burst, ok_m1);
+        check("T3.3 Beat[0]", rdata_burst[0] === 32'hA0C0_0001,
+              $sformatf("Got=0x%08X", rdata_burst[0]));
+        check("T3.3 Beat[3]", rdata_burst[3] === 32'hA0C0_0004,
+              $sformatf("Got=0x%08X", rdata_burst[3]));
+
+        u_bfm_m1.ahb_idle();
+        u_bfm_m2.ahb_idle();
+        u_bfm_m1.HBUSREQ = 1'b0;
+        u_bfm_m2.HBUSREQ = 1'b0;
+        u_bfm_m1.ahb_idle();
+        u_bfm_m1.ahb_idle();
+        $display("");
+
+        // ============================================================
+        // T3.4 - TC_L3_SPLIT_SWITCH
+        // ============================================================
+        $display("=== T3.4: TC_L3_SPLIT_SWITCH ===");
+        $display("    M1 triggers SPLIT (addr=0x0), M2 takes bus, M1 resumes");
+
+        // FIX L3-11: CHỈ M1 request lúc đầu → M1 được grant ngay, read 0x0,
+        // SPLIT xảy ra ĐẦU test (đúng kịch bản thiết kế). M2 sẽ tự assert
+        // HBUSREQ qua ensure_grant() bên trong write_single tại cycle 10.
+        u_bfm_m1.HBUSREQ = 1'b1;
+        @(posedge HCLK);
+
+        fork
+            begin : m1_split
+                u_bfm_m1.ahb_read_single(32'h0000_0000, rdata_m1, ok_m1);
+            end
+            begin : m2_during_split
+                repeat (10) @(posedge HCLK);
+                u_bfm_m2.ahb_write_single(32'h4000_0040, 32'h5EA1_7777, ok_m2);
+            end
+            begin : split_mon
+                logic m1_masked, m2_granted;
+                m1_masked  = 0;
+                m2_granted = 0;
+                repeat (30) begin
+                    @(posedge HCLK);
+                    if (HGRANT_M1 === 1'b0 && HGRANT_M2 === 1'b1) begin
+                        m1_masked  = 1;
+                        m2_granted = 1;
+                    end
+                end
+                check("T3.4 M1 lost grant (split-masked)",
+                      m1_masked, "Arbiter masked M1");
+                check("T3.4 M2 granted during M1 split",
+                      m2_granted, "M2 took bus");
+            end
+        join
+
+        check("T3.4 M1 SPLIT detected (ok=0)",
+              ok_m1 == 1'b0, "HRESP saw SPLIT");
+        check("T3.4 M2 write during split OKAY",
+              ok_m2 == 1'b1, "M2->S2 succeeded");
+
+        // After SPLIT completion, M1 should be unmasked
+        repeat (5) @(posedge HCLK);
+        u_bfm_m1.ahb_write_single(32'h0000_0050, 32'hAF7E_0500, ok_m1);
+        check("T3.4 M1 write after SPLIT resume",
+              ok_m1 == 1'b1, "M1 unmasked and operational");
+
+        u_bfm_m1.ahb_idle();
+        u_bfm_m2.ahb_idle();
+        u_bfm_m1.HBUSREQ = 1'b0;
+        u_bfm_m2.HBUSREQ = 1'b0;
+        u_bfm_m1.ahb_idle();
+        u_bfm_m1.ahb_idle();
+        $display("");
+
+        // ============================================================
+        // T3.5 - TC_L3_SPLIT_OR
+        // ============================================================
+        $display("=== T3.5: TC_L3_SPLIT_OR ===");
+        $display("    Verify HSPLIT_COMBINED = S1|S2|S3 OR logic");
+
+        fork
+            begin : split_or_drive
+                u_bfm_m1.HBUSREQ = 1'b1;
+                u_bfm_m1.ahb_read_single(32'h0000_0000, rdata_m1, ok_m1);
+            end
+            begin : split_or_mon
+                logic combined_seen;
+                combined_seen = 0;
+                repeat (25) begin
+                    @(posedge HCLK);
+                    if (HSPLIT_S1[0] === 1'b1) combined_seen = 1;
+                end
+                check("T3.5 HSPLIT_S1[0] asserted",
+                      combined_seen, "Slave 1 SPLIT signal for M1");
+            end
+        join
+
+        u_bfm_m1.ahb_idle();
+        u_bfm_m1.ahb_idle();
+        u_bfm_m1.HBUSREQ = 1'b0;
+        u_bfm_m1.ahb_idle();
+        $display("");
+
+        // ============================================================
+        // T3.6 - TC_L3_ADDR_MUX_SWITCH
+        // ============================================================
+        $display("=== T3.6: TC_L3_ADDR_MUX_SWITCH ===");
+        $display("    Verify HADDR_S switches correctly between M1 and M2");
+
+        u_bfm_m1.HBUSREQ = 1'b1;
+        u_bfm_m1.ahb_write_single(32'h0000_0060, 32'h01AD_D060, ok_m1);
+        check("T3.6 M1 write S1 OKAY", ok_m1 == 1'b1, "");
+
+        u_bfm_m1.HBUSREQ = 1'b0;
+        u_bfm_m2.HBUSREQ = 1'b1;
+        u_bfm_m2.ahb_write_single(32'h4000_0060, 32'h02AD_D060, ok_m2);
+        check("T3.6 M2 write S2 OKAY", ok_m2 == 1'b1, "addr_ctrl_mux->M2");
+
+        // Read back to verify
+        u_bfm_m1.HBUSREQ = 1'b1;
+        u_bfm_m1.ahb_read_single(32'h0000_0060, rdata_m1, ok_m1);
+        check("T3.6 S1 has M1 data",
+              rdata_m1 === 32'h01AD_D060, $sformatf("Got=0x%08X", rdata_m1));
+        u_bfm_m2.ahb_read_single(32'h4000_0060, rdata_m2, ok_m2);
+        check("T3.6 S2 has M2 data",
+              rdata_m2 === 32'h02AD_D060, $sformatf("Got=0x%08X", rdata_m2));
+
+        u_bfm_m1.ahb_idle();
+        u_bfm_m2.ahb_idle();
+        u_bfm_m2.HBUSREQ = 1'b0;
+        u_bfm_m1.ahb_idle();
+        $display("");
+
+        // ============================================================
+        // T3.7 - TC_L3_WDATA_MUX_PIPE
+        // ============================================================
+        $display("=== T3.7: TC_L3_WDATA_MUX_PIPE ===");
+        $display("    Verify write_data_mux pipeline delay during master switch");
+
+        u_bfm_m1.HBUSREQ = 1'b1;
+        u_bfm_m1.ahb_write_single(32'h0000_0070, 32'hF1FE_01D0, ok_m1);
+        check("T3.7 M1 pipe write OKAY", ok_m1 == 1'b1, "");
+
+        u_bfm_m1.HBUSREQ = 1'b0;
+        u_bfm_m2.HBUSREQ = 1'b1;
+        u_bfm_m2.ahb_write_single(32'h4000_0070, 32'hF1FE_02D0, ok_m2);
+        check("T3.7 M2 pipe write OKAY", ok_m2 == 1'b1, "master_sel_dp switched");
+
+        u_bfm_m1.HBUSREQ = 1'b1;
+        u_bfm_m1.ahb_read_single(32'h0000_0070, rdata_m1, ok_m1);
+        check("T3.7 S1 got M1 data (not M2)",
+              rdata_m1 === 32'hF1FE_01D0, $sformatf("Got=0x%08X", rdata_m1));
+        u_bfm_m2.ahb_read_single(32'h4000_0070, rdata_m2, ok_m2);
+        check("T3.7 S2 got M2 data (not M1)",
+              rdata_m2 === 32'hF1FE_02D0, $sformatf("Got=0x%08X", rdata_m2));
+
+        u_bfm_m1.ahb_idle();
+        u_bfm_m2.ahb_idle();
+        u_bfm_m2.HBUSREQ = 1'b0;
+        u_bfm_m1.ahb_idle();
+        $display("");
+
+        // ============================================================
+        // T3.8 - TC_L3_M1_S1_M2_S2
+        // ============================================================
+        $display("=== T3.8: TC_L3_M1_S1_M2_S2 ===");
+        $display("    M1->S1, M2->S2 (sequential), verify no cross-contamination");
+
+        u_bfm_m1.HBUSREQ = 1'b1;
+        u_bfm_m1.ahb_write_single(32'h0000_0080, 32'hAAAA_8888, ok_m1);
+        check("T3.8 M1->S1 write OKAY", ok_m1 == 1'b1, "");
+
+        u_bfm_m2.HBUSREQ = 1'b1;
+        u_bfm_m2.ahb_write_single(32'h4000_0080, 32'hBBBB_9999, ok_m2);
+        check("T3.8 M2->S2 write OKAY", ok_m2 == 1'b1, "");
+
+        u_bfm_m1.ahb_read_single(32'h0000_0080, rdata_m1, ok_m1);
+        check("T3.8 S1 data = M1 (no contamination)",
+              rdata_m1 === 32'hAAAA_8888,
+              $sformatf("Exp=0xAAAA8888 Got=0x%08X", rdata_m1));
+
+        u_bfm_m2.ahb_read_single(32'h4000_0080, rdata_m2, ok_m2);
+        check("T3.8 S2 data = M2 (no contamination)",
+              rdata_m2 === 32'hBBBB_9999,
+              $sformatf("Exp=0xBBBB9999 Got=0x%08X", rdata_m2));
+
+        u_bfm_m1.ahb_idle();
+        u_bfm_m2.ahb_idle();
+        $display("");
+
+        // ============================================================
+        // Summary
+        // ============================================================
+        #100;
+        $display("================================================================");
+        $display(" LAYER 3 SIMULATION COMPLETE");
+        $display("----------------------------------------------------------------");
+        $display(" PASS : %0d", pass_count);
+        $display(" FAIL : %0d", fail_count);
+        $display(" TOTAL: %0d", pass_count + fail_count);
+        if (fail_count == 0)
+            $display(" RESULT: *** ALL LAYER 3 TESTS PASSED ***");
+        else
+            $display(" RESULT: *** %0d TEST(S) FAILED ***", fail_count);
+        $display("================================================================");
+        $finish;
+    end
+
+endmodule : tb_ahb_interconnect_l3
+// =============================================================================
+// End of Layer 3 EDA Playground Bundle
+// =============================================================================
