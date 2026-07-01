@@ -1,0 +1,624 @@
+`timescale 1ns / 1ps
+//=============================================================================
+// Module   : AHB_Slave  (Split-Capable, AMBA AHB Rev 2.0)
+// Language : SystemVerilog
+//
+// Refactored from AHB_Slave.v.
+// Key changes vs. original:
+//   1. Standard AHB HTRANS encoding per IHI0011A Table 3-1
+//        IDLE=2'b00  BUSY=2'b01  NONSEQ=2'b10  SEQ=2'b11
+//   2. Full SoC 32-bit address / data buses (HADDR[31:0], HWDATA/HRDATA[31:0])
+//   3. 256 × 32-bit word-addressed SRAM (memory_slave)
+//   4. HREADY_IN input for correct AHB pipeline synchronisation
+//   5. HREADYOUT output (renamed from HREADY to avoid ambiguity)
+//   6. 16-bit HSPLITx (AHB-compliant, per IHI0011A §3.12)
+//   7. All combinational logic moved to always_comb; all state/data registers
+//      moved to always_ff — zero latches
+//   8. 2-cycle SPLIT handshake correctly implemented:
+//        ST_RBURST (trigger cycle) → HREADYOUT=0, HRESP=SPLIT  [cycle 1]
+//        ST_LITTLE                 → HREADYOUT=1, HRESP=SPLIT  [cycle 2]
+//        (ver4) ST_TIME_PASS removed — see ver4 note below
+//   9. Burst address managed via local_addr register + wrap helper function;
+//      bus address (HADDR) is never modified — no contamination of shared bus
+//  10. Retain original case(HBURST) loop structure for familiarity
+//
+// ── ver3 changes (response control moved to dedicated test-hook inputs) ──
+//  11. SPLIT and RETRY are NO LONGER triggered by a hard-coded address
+//      (the old `local_addr == 0` artefact is removed).  Instead two
+//      verification-control inputs decide the response:
+//        force_split : when HIGH during any beat's data phase → 2-cycle SPLIT
+//        force_retry : when HIGH during any beat's data phase → 2-cycle RETRY
+//      These are sampled inside ST_WBURST / ST_RBURST, so the response can be
+//      injected on ANY transfer, at ANY address, and on ANY beat of a burst
+//      (e.g. mid-INCR4 / mid-WRAP4) — exactly where a real slave would stall.
+//
+//  12. The 2-cycle handshake (IHI0011A §3.9.3) is preserved:
+//        cycle 1 = the triggering W/RBURST beat → HREADYOUT=0, HRESP=SPLIT/RETRY
+//        cycle 2 = ST_LITTLE (SPLIT) / ST_RETRY2 (RETRY) → HREADYOUT=1, resp held
+//      The aborted beat NEVER commits: SEQ BLOCK 4 (SRAM write) and the
+//      address/beat advance (SEQ BLOCK 2/3) are all gated off on the abort.
+//
+//  13. SPLIT vs RETRY semantics unchanged:
+//        SPLIT → latch HMASTER (split_master_reg), assert HSPLITx (Arbiter masks)
+//        RETRY → no HMASTER latch, no HSPLITx (Arbiter performs no masking)
+//
+//  Directed vs constrained-random:
+//    The testbench may drive force_split/force_retry directly for directed
+//    tests, OR randomize them per beat (e.g. 10% probability) for CRT.  The
+//    response-generation FSM stays inside the DUT (where it must be verified)
+//    while the *decision of when to stall* is owned by the testbench — this is
+//    the standard reactive-slave control split.
+//
+//  force_split has priority over force_retry; both HIGH simultaneously is
+//  illegal (see assertion a_force_mutex) and resolves to SPLIT.
+//
+// ── ver4 changes (align with corrected Arbiter: HLOCK > SPLIT) ───────────────
+//  14. A locked transfer (HMASTLOCK=1) MUST be completed, never SPLIT/RETRY-ed
+//      (IHI0011A §3.11.5 & §3.12.3: a locked transfer must complete before any
+//      other transfer continues, and the arbiter keeps the locked master
+//      granted to ensure the final locked beat is not SPLIT/RETRY-ed).
+//      Therefore force_split / force_retry are SUPPRESSED while HMASTLOCK=1:
+//      the slave simply finishes the transfer with the normal OKAY/burst path.
+//  15. Consequence: the post-SPLIT lock-wait state ST_TIME_PASS is now
+//      UNREACHABLE (a SPLIT can only start when HMASTLOCK=0) and has been
+//      REMOVED, together with the HMASTLOCK branch of ST_LITTLE.  Its old
+//      purpose (defer HSPLITx until lock clears) was built around the previous,
+//      incorrect arbiter that masked a locked master.
+//  16. resp_abort, the per-beat SPLIT/RETRY abort qualifier, is gated with
+//      ~HMASTLOCK so a locked beat always commits (no accidental abort), and
+//      the split_master_reg latch is likewise gated with ~HMASTLOCK.
+//=============================================================================
+module AHB_Slave #(
+    parameter int SEED_VALUE = 10        // seeds memory_slave[0..2] (bundle-compatible)
+) (
+    //── System ────────────────────────────────────────────────────────────────
+    input  logic        HCLK,
+    input  logic        HRESETn,
+ 
+    //── Pipeline Synchronisation ──────────────────────────────────────────────
+    // Global HREADY from the bus interconnect.  Slave must only sample address
+    // and control signals when HREADY_IN is HIGH (AHB Spec §3.8).
+    input  logic        HREADY_IN,
+ 
+    //── Address & Control (driven by Address/Control MUX) ────────────────────
+    input  logic        HSELx,          // Slave select from Decoder
+    input  logic [31:0] HADDR,          // 32-bit system address bus
+    input  logic [1:0]  HTRANS,         // Transfer type
+    input  logic        HWRITE,         // 1 = write, 0 = read
+    input  logic [2:0]  HSIZE,          // Transfer size
+    input  logic [2:0]  HBURST,         // Burst type
+ 
+    //── Data ──────────────────────────────────────────────────────────────────
+    input  logic [31:0] HWDATA,         // Write data bus (32-bit)
+    output logic [31:0] HRDATA,         // Read  data bus (32-bit)
+ 
+    //── SPLIT-Capable Signals ─────────────────────────────────────────────────
+    input  logic [3:0]  HMASTER,        // Current bus master ID from Arbiter
+    input  logic        HMASTLOCK,      // Locked transfer indicator
+    output logic [15:0] HSPLITx,        // Split completion request (to Arbiter)
+ 
+    //── Response-Control Test Hooks (ver3, verification-only) ─────────────────
+    // Driven by the testbench / reactive-slave sequence.  Sampled in the data
+    // phase (ST_WBURST / ST_RBURST) of every beat.  Tie LOW for normal operation.
+    input  logic        force_split,    // 1 → issue 2-cycle SPLIT on current beat
+    input  logic        force_retry,    // 1 → issue 2-cycle RETRY on current beat
+ 
+    //── Transfer Response ─────────────────────────────────────────────────────
+    output logic        HREADYOUT,      // Slave ready output
+    output logic [1:0]  HRESP           // Transfer response
+);
+ 
+//=============================================================================
+// ── AHB Protocol Constants ────────────────────────────────────────────────────
+//=============================================================================
+ 
+// HTRANS – IHI0011A Table 3-1
+localparam logic [1:0]
+    T_IDLE   = 2'b00,
+    T_BUSY   = 2'b01,
+    T_NONSEQ = 2'b10,
+    T_SEQ    = 2'b11;
+ 
+// HRESP – IHI0011A Table 3-5
+localparam logic [1:0]
+    R_OKAY  = 2'b00,
+    R_ERROR = 2'b01,
+    R_RETRY = 2'b10,
+    R_SPLIT = 2'b11;
+ 
+// HBURST – IHI0011A Table 3-2
+localparam logic [2:0]
+    B_SINGLE = 3'b000,   B_INCR   = 3'b001,
+    B_WRAP4  = 3'b010,   B_INCR4  = 3'b011,
+    B_WRAP8  = 3'b100,   B_INCR8  = 3'b101,
+    B_WRAP16 = 3'b110,   B_INCR16 = 3'b111;
+ 
+//=============================================================================
+// ── FSM State Encoding ────────────────────────────────────────────────────────
+//=============================================================================
+localparam logic [2:0]
+    ST_IDLE      = 3'b000,   // Slave idle, ready for a new transfer
+    ST_ACTIVE    = 3'b001,   // 1-cycle pipeline wait; dispatches to W/R burst
+    ST_RETRY2    = 3'b010,   // RETRY cycle-2 : HREADYOUT=1, HRESP=RETRY (cycle-1 is the burst beat)
+    ST_LITTLE    = 3'b011,   // SPLIT cycle-2 : HREADYOUT=1, HRESP=SPLIT
+    ST_WBURST    = 3'b100,   // Write burst in progress
+    ST_RBURST    = 3'b101;   // Read  burst in progress
+    // 3'b110, 3'b111 reserved (unused) — ver4 removed ST_TIME_PASS (3'b111)
+ 
+//=============================================================================
+// ── Internal Registers ────────────────────────────────────────────────────────
+//=============================================================================
+ 
+// FSM
+logic [2:0] ps_slave;          // present state (registered)
+logic [2:0] ns_slave;          // next    state (combinational)
+ 
+// ── Address-phase pipeline latch ──────────────────────────────────────────────
+// Sampled once per NONSEQ transfer when slave is free.
+// HADDR[9:2] maps byte address → word index for the 256-word SRAM.
+logic [7:0] local_addr;        // current word index (updated each burst beat)
+logic [7:0] local_addr_base;   // initial burst word index (fixed for wrap calcs)
+logic       local_write;       // registered HWRITE
+logic [2:0] local_burst;       // registered HBURST
+logic [2:0] local_size;        // registered HSIZE  (reserved for future use)
+ 
+// ── Burst beat down-counter ───────────────────────────────────────────────────
+// Loaded in ST_ACTIVE (total beats).  Decremented once per beat in ST_W/RBURST.
+logic [5:0] beat_cnt;          // 6-bit → max 32 beats (INCR mode cap)
+ 
+// ── SPLIT support ─────────────────────────────────────────────────────────────
+logic [3:0] split_master_reg;  // HMASTER ID of the master that was SPLIT
+ 
+// ── Response-abort helper (ver3) ──────────────────────────────────────────────
+// HIGH on any data-phase cycle where the testbench forces a SPLIT or RETRY.
+// Used to gate off SRAM write / address advance / beat-count so the aborted
+// beat leaves zero side-effects.  force_split has priority over force_retry.
+logic resp_abort;
+// ver4: a locked beat is never aborted — force_* is suppressed under HMASTLOCK.
+assign resp_abort = (force_split | force_retry) & ~HMASTLOCK;
+ 
+// ── 256 × 32-bit SRAM ────────────────────────────────────────────────────────
+logic [31:0] memory_slave [0:255];
+ 
+//=============================================================================
+// ── SRAM Initialisation (Simulation Only) ─────────────────────────────────────
+// For synthesis, replace with technology-specific BRAM initialisation.
+//=============================================================================
+initial begin : mem_init
+    for (int i = 0; i < 256; i++)
+        memory_slave[i] = 32'd0;
+    // Seed values parametrised by SEED_VALUE (per-slave distinct via instance param)
+    memory_slave[0] = 32'(SEED_VALUE);
+    memory_slave[1] = 32'(SEED_VALUE * 2);
+    memory_slave[2] = 32'(SEED_VALUE * 3);
+end
+ 
+//=============================================================================
+// ── Burst Wrap-Address Helper Function ────────────────────────────────────────
+// Returns the next word-index for the current burst type.
+// Wrapping bursts fix the upper bits of the address and only allow the lower
+// N bits to cycle (IHI0011A §3.6).
+//  WRAP4  → 4-word  boundary → fix bits[7:2], wrap bits[1:0]
+//  WRAP8  → 8-word  boundary → fix bits[7:3], wrap bits[2:0]
+//  WRAP16 → 16-word boundary → fix bits[7:4], wrap bits[3:0]
+//  INCR*  → no wrap          → plain +1
+//=============================================================================
+function automatic logic [7:0] next_burst_addr (
+    input logic [7:0] base,    // initial word address of this burst
+    input logic [7:0] cur,     // current word address
+    input logic [2:0] burst    // HBURST encoding
+);
+    logic [7:0] lin;
+    lin = cur + 8'h01;
+    case (burst)
+        B_WRAP4  : return {base[7:2], lin[1:0]};
+        B_WRAP8  : return {base[7:3], lin[2:0]};
+        B_WRAP16 : return {base[7:4], lin[3:0]};
+        default  : return lin;                    // INCR, INCR4, INCR8, INCR16
+    endcase
+endfunction
+ 
+//=============================================================================
+// ══ SEQUENTIAL BLOCK 1 : FSM State Register ══════════════════════════════════
+//=============================================================================
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn)
+        ps_slave <= ST_IDLE;
+    else
+        ps_slave <= ns_slave;
+end
+ 
+//=============================================================================
+// ══ SEQUENTIAL BLOCK 2 : Address-Phase Pipeline Latch ════════════════════════
+//
+// Captures HADDR / HBURST / HWRITE at the start of every new (NONSEQ)
+// transaction while the slave is in an address-accepting state (IDLE / AGAIN).
+//
+// Burst address advance:
+//   Once inside ST_WBURST / ST_RBURST the address is managed entirely by
+//   local_addr — HADDR on the shared bus is NEVER written.
+//   local_addr increments one cycle early (beat_cnt > 1) so that the correct
+//   word index is already stable on the SRAM port for each data beat.
+//=============================================================================
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn) begin
+        local_addr      <= 8'h00;
+        local_addr_base <= 8'h00;
+        local_write     <= 1'b0;
+        local_burst     <= B_SINGLE;
+        local_size      <= 3'b010;    // default: 32-bit word
+    end else begin
+ 
+        // ── Priority-1 : latch new NONSEQ transfer ──────────────────────────
+        // ver2: latch only in ST_IDLE.  ST_RETRY1/2 never accept a new address
+        // (RETRY cyc-1 has HREADYOUT=0; in cyc-2 the master must drive IDLE
+        // because it cancelled its pipelined transfer per IHI0011A §3.9.3).
+        if (HSELx && HREADY_IN && (HTRANS == T_NONSEQ) &&
+            (ps_slave == ST_IDLE)) begin
+            local_addr      <= HADDR[9:2];   // byte address → word index
+            local_addr_base <= HADDR[9:2];   // fixed base for wrap boundary
+            local_write     <= HWRITE;
+            local_burst     <= HBURST;
+            local_size      <= HSIZE;
+        end
+ 
+        // ── Priority-2 : advance address between burst beats ─────────────────
+        // Guard (beat_cnt > 1): do NOT increment on the very last beat so that
+        // local_addr stays stable while the final write/read executes.
+        // ver3: also freeze on resp_abort — an aborted (SPLIT/RETRY) beat must
+        // not advance, so the re-attempt restarts from the correct address.
+        else if ((ps_slave == ST_WBURST || ps_slave == ST_RBURST) &&
+                  beat_cnt > 6'd1 && !resp_abort) begin
+            local_addr <= next_burst_addr(local_addr_base, local_addr, local_burst);
+        end
+ 
+    end
+end
+ 
+//=============================================================================
+// ══ SEQUENTIAL BLOCK 3 : Beat Down-Counter ════════════════════════════════════
+//
+// Loaded in ST_ACTIVE (one pipeline stage before the first burst beat fires).
+// Decremented in ST_WBURST / ST_RBURST.
+// Combinational logic uses beat_cnt to decide: stay in burst or return to IDLE.
+//=============================================================================
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn) begin
+        beat_cnt <= 6'd0;
+    end else begin
+        case (ps_slave)
+ 
+            ST_ACTIVE : begin
+                // Arm the counter based on the just-latched burst type
+                case (local_burst)
+                    B_SINGLE           : beat_cnt <= 6'd1;
+                    B_INCR             : beat_cnt <= 6'd32; // practical cap for INCR
+                    B_WRAP4, B_INCR4   : beat_cnt <= 6'd4;
+                    B_WRAP8, B_INCR8   : beat_cnt <= 6'd8;
+                    B_WRAP16, B_INCR16 : beat_cnt <= 6'd16;
+                    default            : beat_cnt <= 6'd1;
+                endcase
+            end
+ 
+            ST_WBURST,
+            ST_RBURST : begin
+                if (beat_cnt > 6'd0 && !resp_abort)   // freeze on SPLIT/RETRY abort
+                    beat_cnt <= beat_cnt - 6'd1;
+            end
+ 
+            default : ; // hold value in all other states
+ 
+        endcase
+    end
+end
+ 
+//=============================================================================
+// ══ SEQUENTIAL BLOCK 4 : SRAM Write Port ══════════════════════════════════════
+//
+// Clocked write fires every cycle the FSM spends in ST_WBURST.
+// local_addr already holds the correct word index for each burst beat.
+// No reset path: SRAM content is managed by the `initial` block (simulation)
+// or by the physical memory technology (synthesis).
+//
+// Race-condition note:
+//   All RHS values (local_addr, HWDATA) are read using the BEFORE-EDGE values
+//   due to non-blocking semantics.  The write therefore uses the address that
+//   was valid DURING that cycle, not the incremented value from SEQ BLOCK 2.
+//=============================================================================
+always_ff @(posedge HCLK) begin
+    // ver3: do NOT commit the beat that is being SPLIT/RETRY-aborted.
+    if (ps_slave == ST_WBURST && !resp_abort)
+        memory_slave[local_addr] <= HWDATA;
+end
+ 
+//=============================================================================
+// ══ SEQUENTIAL BLOCK 5 : SPLIT Master-ID Latch ════════════════════════════════
+//
+// ver3: captures HMASTER on the exact cycle a SPLIT is forced (any beat of
+// ST_WBURST / ST_RBURST while force_split is HIGH).  By the next cycle
+// (ST_LITTLE) the register holds the correct master index for HSPLITx.
+// RETRY never latches this register (RETRY performs no masking).
+//=============================================================================
+always_ff @(posedge HCLK or negedge HRESETn) begin
+    if (!HRESETn) begin
+        split_master_reg <= 4'h0;
+    end else if ((ps_slave == ST_WBURST || ps_slave == ST_RBURST) &&
+                 force_split && !HMASTLOCK) begin
+        split_master_reg <= HMASTER;
+    end
+end
+ 
+//=============================================================================
+// ══ COMBINATIONAL BLOCK : Next-State & Output Logic ═══════════════════════════
+//
+// All outputs default to safe values at the top of the block to prevent
+// unintended latches.  Every state and every case branch must be fully covered.
+//=============================================================================
+always_comb begin : fsm_comb
+ 
+    //── Safe defaults ─────────────────────────────────────────────────────────
+    ns_slave  = ps_slave;           // hold state → prevents latches
+    HREADYOUT = 1'b1;               // slave ready by default
+    HRESP     = R_OKAY;
+    HRDATA    = 32'h0000_0000;
+    HSPLITx   = 16'h0000;
+ 
+    case (ps_slave)
+ 
+        //======================================================================
+        // ST_IDLE
+        // Slave is idle and ready.  Waits for a valid NONSEQ transfer.
+        //======================================================================
+        ST_IDLE : begin
+            HREADYOUT = 1'b1;
+            HRESP     = R_OKAY;
+            if (HSELx && HREADY_IN && (HTRANS == T_NONSEQ))
+                ns_slave = ST_ACTIVE;
+            // IDLE, BUSY, SEQ in idle → stay ST_IDLE
+        end
+ 
+        //======================================================================
+        // ST_ACTIVE
+        // One-cycle pipeline wait state inserted after address is latched.
+        // HREADYOUT=0 holds the bus while the slave prepares for the data phase.
+        // Dispatches unconditionally to the write or read burst path; the
+        // SPLIT/RETRY decision is made later, per beat, inside ST_W/RBURST.
+        //======================================================================
+        ST_ACTIVE : begin
+            HREADYOUT = 1'b0;
+            HRESP     = R_OKAY;
+            ns_slave  = local_write ? ST_WBURST : ST_RBURST;
+        end
+ 
+        //======================================================================
+        // ST_RETRY2 — RETRY CYCLE 2 (final cycle per IHI0011A §3.9.3)
+        //
+        // Reached from ST_WBURST / ST_RBURST when force_retry was sampled on a
+        // beat (that beat was RETRY cycle 1, HREADYOUT=0).  Here we drive
+        // HREADYOUT=1 while holding HRESP=RETRY for exactly one more cycle,
+        // then return to ST_IDLE so the master can re-attempt the transfer.
+        // No HSPLITx, no split_master_reg latch → Arbiter performs no masking.
+        //======================================================================
+        ST_RETRY2 : begin
+            HREADYOUT = 1'b1;
+            HRESP     = R_RETRY;
+            ns_slave  = ST_IDLE;
+        end
+ 
+        //======================================================================
+        // ST_WBURST  ── WRITE BURST
+        //
+        // Memory write is handled entirely in SEQ BLOCK 4.
+        // Address increment is handled in SEQ BLOCK 2.
+        // This block only drives protocol outputs and computes next state.
+        //
+        // Structure mirrors original case(HBURST) loops for readability.
+        //======================================================================
+        ST_WBURST : begin
+ 
+            // ── ver4: forced SPLIT / RETRY on this write beat (SUPPRESSED if
+            //    HMASTLOCK — a locked transfer must complete, §3.11.5/§3.12.3) ─
+            // SEQ BLOCK 4 is gated by resp_abort so the beat is NOT committed.
+            // force_split has priority over force_retry.
+            if (force_split && !HMASTLOCK) begin
+                HREADYOUT = 1'b0;          // 2-cycle SPLIT, cycle 1
+                HRESP     = R_SPLIT;
+                ns_slave  = ST_LITTLE;     // SEQ BLOCK 5 latches HMASTER
+            end
+            else if (force_retry && !HMASTLOCK) begin
+                HREADYOUT = 1'b0;          // 2-cycle RETRY, cycle 1
+                HRESP     = R_RETRY;
+                ns_slave  = ST_RETRY2;
+            end
+            else begin
+            HRESP = R_OKAY;
+ 
+            case (local_burst)
+ 
+                //── 000 : SINGLE ──────────────────────────────────────────────
+                B_SINGLE : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = ST_IDLE;
+                end
+ 
+                //── 001 : INCR (undefined length, capped at 32 beats) ─────────
+                B_INCR : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_WBURST;
+                end
+ 
+                //── 010 : WRAP4 (4-beat wrapping) ─────────────────────────────
+                B_WRAP4 : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_WBURST;
+                end
+ 
+                //── 011 : INCR4 (4-beat incrementing) ─────────────────────────
+                B_INCR4 : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_WBURST;
+                end
+ 
+                //── 100 : WRAP8 (8-beat wrapping) ─────────────────────────────
+                B_WRAP8 : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_WBURST;
+                end
+ 
+                //── 101 : INCR8 (8-beat incrementing) ─────────────────────────
+                B_INCR8 : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_WBURST;
+                end
+ 
+                //── 110 : WRAP16 (16-beat wrapping) ───────────────────────────
+                B_WRAP16 : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_WBURST;
+                end
+ 
+                //── 111 : INCR16 (16-beat incrementing) ───────────────────────
+                B_INCR16 : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_WBURST;
+                end
+ 
+                default : begin
+                    HREADYOUT = 1'b1;
+                    ns_slave  = ST_IDLE;
+                end
+ 
+            endcase
+            end // else (no forced response)
+        end // ST_WBURST
+ 
+        //======================================================================
+        // ST_RBURST  ── READ BURST
+        //
+        // Combinational SRAM read: HRDATA = memory_slave[local_addr].
+        // Structure mirrors original case(HBURST) loops for readability.
+        //
+        // SPLIT trigger (B_SINGLE, local_addr == 0):
+        //   Simulates a "slow" path exactly as in original AHB_Slave.v.
+        //   Per IHI0011A §3.9.3, a 2-cycle response is mandatory:
+        //     ┌─ This cycle (ST_RBURST)  → HREADYOUT=0, HRESP=SPLIT  [cycle 1]
+        //     └─ Next cycle  (ST_LITTLE) → HREADYOUT=1, HRESP=SPLIT  [cycle 2]
+        //======================================================================
+        ST_RBURST : begin
+            HRDATA = memory_slave[local_addr];   // purely combinational SRAM read
+ 
+            // ── ver4: forced SPLIT / RETRY on this read beat (SUPPRESSED if
+            //    HMASTLOCK — locked transfer must complete) ────────────────────
+            if (force_split && !HMASTLOCK) begin
+                HREADYOUT = 1'b0;          // 2-cycle SPLIT, cycle 1
+                HRESP     = R_SPLIT;
+                HRDATA    = 32'h0000_0000;  // data invalid during SPLIT response
+                ns_slave  = ST_LITTLE;     // SEQ BLOCK 5 latches HMASTER
+            end
+            else if (force_retry && !HMASTLOCK) begin
+                HREADYOUT = 1'b0;          // 2-cycle RETRY, cycle 1
+                HRESP     = R_RETRY;
+                HRDATA    = 32'h0000_0000;  // data invalid during RETRY response
+                ns_slave  = ST_RETRY2;
+            end
+            else begin
+            case (local_burst)
+ 
+                //── 000 : SINGLE ──────────────────────────────────────────────
+                B_SINGLE : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = ST_IDLE;
+                end
+ 
+                //── 001 : INCR ────────────────────────────────────────────────
+                B_INCR : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_RBURST;
+                end
+ 
+                //── 010 : WRAP4 ───────────────────────────────────────────────
+                B_WRAP4 : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_RBURST;
+                end
+ 
+                //── 011 : INCR4 ───────────────────────────────────────────────
+                B_INCR4 : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_RBURST;
+                end
+ 
+                //── 100 : WRAP8 ───────────────────────────────────────────────
+                B_WRAP8 : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_RBURST;
+                end
+ 
+                //── 101 : INCR8 ───────────────────────────────────────────────
+                B_INCR8 : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_RBURST;
+                end
+ 
+                //── 110 : WRAP16 ──────────────────────────────────────────────
+                B_WRAP16 : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_RBURST;
+                end
+ 
+                //── 111 : INCR16 ──────────────────────────────────────────────
+                B_INCR16 : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = (beat_cnt <= 6'd1) ? ST_IDLE : ST_RBURST;
+                end
+ 
+                default : begin
+                    HREADYOUT = 1'b1;
+                    HRESP     = R_OKAY;
+                    ns_slave  = ST_IDLE;
+                end
+ 
+            endcase
+            end // else (no forced response)
+        end // ST_RBURST
+ 
+        //======================================================================
+        // ST_LITTLE — SPLIT CYCLE 2 (final cycle per IHI0011A §3.9.3)
+        //
+        // Drive HREADYOUT=1 while holding HRESP=SPLIT for one more cycle to
+        // complete the 2-cycle handshake, then assert HSPLITx[split_master_reg]
+        // to tell the Arbiter which master may re-attempt (IHI0011A §3.12).
+        //
+        // ver4: a SPLIT can only have started while HMASTLOCK=0 (force_* is
+        // suppressed under lock), so HMASTLOCK is guaranteed 0 here.  The old
+        // lock-wait branch (→ ST_TIME_PASS) is therefore removed.
+        //======================================================================
+        ST_LITTLE : begin
+            HREADYOUT = 1'b1;                       // final cycle of 2-cycle SPLIT
+            HRESP     = R_SPLIT;
+            HSPLITx   = 16'h0001 << split_master_reg;  // wake the Arbiter (un-mask)
+            ns_slave  = ST_IDLE;
+        end
+ 
+        //── Catch-all: recover to IDLE on illegal state encoding ──────────────
+        default : begin
+            ns_slave  = ST_IDLE;
+            HREADYOUT = 1'b1;
+            HRESP     = R_OKAY;
+        end
+ 
+    endcase
+end : fsm_comb
+ 
+endmodule
+//=============================================================================
+// End of AHB_Slave.sv
+//=============================================================================
