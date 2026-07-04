@@ -1,0 +1,728 @@
+// ahb_pkg_agents.svh -- M5b -- drivers/monitors/agents + virtual_sequencer (include SAU items)
+    class ahb_master_driver extends uvm_driver#(ahb_seq_item);
+        `uvm_component_utils(ahb_master_driver)
+        virtual ahb_master_if vif;
+        int unsigned beat_timeout = 256;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+        endfunction
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            if (!uvm_config_db#(virtual ahb_master_if)::get(this, "", "vif", vif))
+                `uvm_fatal("CFGDB",
+                    $sformatf("vif MISSING for %s", get_full_name()))
+            else
+                `uvm_info("CFGDB",
+                    $sformatf("vif OK for %s", get_full_name()), UVM_LOW)
+        endfunction
+        task run_phase(uvm_phase phase);
+            ahb_seq_item req;
+            park_idle();
+            wait (vif.HRESETn === 1'b1);
+            @(vif.drv_cb);
+            forever begin
+                seq_item_port.get_next_item(req);
+                `uvm_info("DRV", $sformatf("Starting: %s", req.convert2string()), UVM_HIGH)
+                if (req.num_beats <= 1)
+                    drive_single(req);
+                else
+                    drive_burst(req);
+                `uvm_info("DRV", $sformatf("Completed: %s", req.convert2string()), UVM_HIGH)
+                seq_item_port.item_done();
+            end
+        endtask
+        task park_idle();
+            @(vif.drv_cb);
+            vif.drv_cb.HBUSREQ <= 1'b0;
+            vif.drv_cb.HLOCK   <= 1'b0;
+            vif.drv_cb.HADDR   <= 32'h0;
+            vif.drv_cb.HWDATA  <= 32'h0;
+            vif.drv_cb.HTRANS  <= T_IDLE;
+            vif.drv_cb.HWRITE  <= 1'b0;
+            vif.drv_cb.HSIZE   <= SZ_WORD;
+            vif.drv_cb.HBURST  <= B_SINGLE;
+        endtask
+        task drive_single(ahb_seq_item it);
+            @(vif.drv_cb);
+            vif.drv_cb.HBUSREQ <= it.busreq ? 1'b1 : 1'b0;
+            vif.drv_cb.HLOCK   <= it.lock;
+            vif.drv_cb.HTRANS  <= T_IDLE;
+            forever begin
+                @(vif.drv_cb);
+                if (vif.drv_cb.HGRANT === 1'b1 &&
+                    vif.drv_cb.HREADY === 1'b1) break;
+            end
+            vif.drv_cb.HADDR   <= it.addr;
+            vif.drv_cb.HTRANS  <= T_NONSEQ;
+            vif.drv_cb.HWRITE  <= (it.dir == AHB_WRITE);
+            vif.drv_cb.HSIZE   <= it.size;
+            vif.drv_cb.HBURST  <= B_SINGLE;
+            vif.drv_cb.HBUSREQ <= 1'b0;
+            @(vif.drv_cb);
+            vif.drv_cb.HTRANS  <= T_IDLE;
+            vif.drv_cb.HADDR   <= 32'h0;
+            vif.drv_cb.HWRITE  <= 1'b0;
+            vif.drv_cb.HBURST  <= B_SINGLE;
+            if (it.dir == AHB_WRITE)
+                vif.drv_cb.HWDATA <= it.wdata;
+            else
+                vif.drv_cb.HWDATA <= 32'h0;
+            @(vif.drv_cb);
+            while (vif.drv_cb.HREADY !== 1'b1) @(vif.drv_cb);
+            it.resp  = vif.drv_cb.HRESP_M;
+            it.rdata = (it.dir == AHB_READ) ? vif.drv_cb.HRDATA_M : 32'h0;
+            @(vif.drv_cb);
+            vif.drv_cb.HWDATA <= 32'h0;
+            vif.drv_cb.HLOCK  <= 1'b0;
+            vif.drv_cb.HTRANS <= T_IDLE;
+        endtask
+        task drive_burst(ahb_seq_item it);
+            bit [31:0] cur_addr;
+            int unsigned N;
+            N = it.num_beats;
+            it.beats_rd   = {};
+            it.beats_resp = {};
+            for (int x = 0; x < N; x++) begin
+                it.beats_rd.push_back(32'h0);
+                it.beats_resp.push_back(R_OKAY);
+            end
+            @(vif.drv_cb);
+            vif.drv_cb.HBUSREQ <= 1'b1;
+            vif.drv_cb.HLOCK   <= it.lock;
+            vif.drv_cb.HTRANS  <= T_IDLE;
+            forever begin
+                @(vif.drv_cb);
+                if (vif.drv_cb.HGRANT === 1'b1 &&
+                    vif.drv_cb.HREADY === 1'b1) break;
+            end
+            cur_addr = it.addr;
+            vif.drv_cb.HADDR  <= cur_addr;
+            vif.drv_cb.HTRANS <= T_NONSEQ;
+            vif.drv_cb.HWRITE <= (it.dir == AHB_WRITE);
+            vif.drv_cb.HSIZE  <= it.size;
+            vif.drv_cb.HBURST <= it.burst;
+            for (int i = 1; i < N; i++) begin
+                @(vif.drv_cb);
+                wait_hready();
+                if (i >= 2) begin
+                    it.beats_resp[i-2] = vif.drv_cb.HRESP_M;
+                    if (it.dir == AHB_READ)
+                        it.beats_rd[i-2] = vif.drv_cb.HRDATA_M;
+                end
+                if (it.dir == AHB_WRITE && i-1 < it.beats_wr.size())
+                    vif.drv_cb.HWDATA <= it.beats_wr[i-1];
+                cur_addr = next_addr(it.addr, cur_addr, it.burst, it.size);
+                vif.drv_cb.HADDR  <= cur_addr;
+                vif.drv_cb.HTRANS <= T_SEQ;
+            end
+            @(vif.drv_cb);
+            wait_hready();
+            if (N >= 2) begin
+                it.beats_resp[N-2] = vif.drv_cb.HRESP_M;
+                if (it.dir == AHB_READ)
+                    it.beats_rd[N-2] = vif.drv_cb.HRDATA_M;
+            end
+            if (it.dir == AHB_WRITE && N-1 < it.beats_wr.size())
+                vif.drv_cb.HWDATA <= it.beats_wr[N-1];
+            vif.drv_cb.HTRANS <= T_IDLE;
+            vif.drv_cb.HADDR  <= 32'h0;
+            vif.drv_cb.HWRITE <= 1'b0;
+            vif.drv_cb.HBURST <= B_SINGLE;
+            @(vif.drv_cb);
+            wait_hready();
+            it.beats_resp[N-1] = vif.drv_cb.HRESP_M;
+            if (it.dir == AHB_READ)
+                it.beats_rd[N-1] = vif.drv_cb.HRDATA_M;
+            it.resp  = it.beats_resp[0];
+            it.rdata = (it.dir == AHB_READ) ? it.beats_rd[0] : 32'h0;
+            @(vif.drv_cb);
+            vif.drv_cb.HBUSREQ <= 1'b0;
+            vif.drv_cb.HLOCK   <= 1'b0;
+            vif.drv_cb.HWDATA  <= 32'h0;
+            vif.drv_cb.HTRANS  <= T_IDLE;
+        endtask
+        task wait_hready();
+            int cnt = 0;
+            while (vif.drv_cb.HREADY !== 1'b1) begin
+                @(vif.drv_cb);
+                cnt++;
+                if (cnt > beat_timeout) begin
+                    `uvm_error("DRV", $sformatf("HREADY stuck low > %0d cycles", beat_timeout))
+                    return;
+                end
+            end
+        endtask
+        function bit [31:0] next_addr(bit [31:0] base, bit [31:0] cur,
+                                       logic [2:0] burst_type, logic [2:0] hsize);
+            bit [31:0] step = 32'h1 << hsize;
+            bit [31:0] lin  = cur + step;
+            case (burst_type)
+                B_WRAP4 : return {base[31:4], lin[3:0]};
+                B_WRAP8 : return {base[31:5], lin[4:0]};
+                B_WRAP16: return {base[31:6], lin[5:0]};
+                default : return lin;
+            endcase
+        endfunction
+    endclass : ahb_master_driver
+    class ahb_master_monitor extends uvm_monitor;
+        `uvm_component_utils(ahb_master_monitor)
+        virtual ahb_master_if vif;
+        uvm_analysis_port#(ahb_seq_item) ap;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+            ap = new("ap", this);
+        endfunction
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            if (!uvm_config_db#(virtual ahb_master_if)::get(this, "", "vif", vif))
+                `uvm_fatal("CFGDB",
+                    $sformatf("vif MISSING for %s", get_full_name()))
+            else
+                `uvm_info("CFGDB",
+                    $sformatf("vif OK for %s", get_full_name()), UVM_LOW)
+        endfunction
+        task run_phase(uvm_phase phase);
+            ahb_seq_item pending;
+            bit          in_burst    = 1'b0;
+            int unsigned beat_idx    = 0;
+            int unsigned expected_N  = 1;
+            bit          is_write    = 1'b0;
+            wait (vif.HRESETn === 1'b1);
+            forever begin
+                @(vif.mon_cb);
+                if (in_burst && vif.mon_cb.HREADY === 1'b1) begin
+                    pending.beats_resp.push_back(vif.mon_cb.HRESP_M);
+                    if (is_write)
+                        pending.beats_wr.push_back(vif.mon_cb.HWDATA);
+                    else
+                        pending.beats_rd.push_back(vif.mon_cb.HRDATA_M);
+                    beat_idx++;
+                    if (beat_idx >= expected_N) begin
+                        pending.resp  = pending.beats_resp[0];
+                        pending.wdata = is_write ? (pending.beats_wr.size()>0 ? pending.beats_wr[0] : 32'h0) : 32'h0;
+                        pending.rdata = is_write ? 32'h0 : (pending.beats_rd.size()>0 ? pending.beats_rd[0] : 32'h0);
+                        `uvm_info("MON", $sformatf("Published: %s", pending.convert2string()), UVM_HIGH)
+                        ap.write(pending);
+                        in_burst = 1'b0;
+                    end
+                end
+                if (!in_burst &&
+                    vif.mon_cb.HTRANS === T_NONSEQ &&
+                    vif.mon_cb.HREADY === 1'b1) begin
+                    pending           = ahb_seq_item::type_id::create("mon_item");
+                    pending.addr      = vif.mon_cb.HADDR;
+                    pending.dir       = vif.mon_cb.HWRITE ? AHB_WRITE : AHB_READ;
+                    pending.size      = vif.mon_cb.HSIZE;
+                    pending.burst     = vif.mon_cb.HBURST;
+                    pending.trans     = vif.mon_cb.HTRANS;
+                    pending.lock      = vif.mon_cb.HLOCK;
+                    pending.beats_wr  = {};
+                    pending.beats_rd  = {};
+                    pending.beats_resp = {};
+                    is_write   = (pending.dir == AHB_WRITE);
+                    beat_idx   = 0;
+                    case (pending.burst)
+                        B_INCR4, B_WRAP4  : expected_N = 4;
+                        B_INCR8, B_WRAP8  : expected_N = 8;
+                        B_INCR16,B_WRAP16 : expected_N = 16;
+                        default           : expected_N = 1;
+                    endcase
+                    pending.num_beats = expected_N;
+                    in_burst = 1'b1;
+                end
+            end
+        endtask
+    endclass : ahb_master_monitor
+    class ahb_master_agent extends uvm_agent;
+        `uvm_component_utils(ahb_master_agent)
+        ahb_master_sequencer  seqr;
+        ahb_master_driver     drv;
+        ahb_master_monitor    mon;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+        endfunction
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            mon = ahb_master_monitor::type_id::create("mon", this);
+            if (get_is_active() == UVM_ACTIVE) begin
+                seqr = ahb_master_sequencer::type_id::create("seqr", this);
+                drv  = ahb_master_driver   ::type_id::create("drv",  this);
+            end
+        endfunction
+        function void connect_phase(uvm_phase phase);
+            super.connect_phase(phase);
+            if (get_is_active() == UVM_ACTIVE) begin
+                drv.seq_item_port.connect(seqr.seq_item_export);
+            end
+        endfunction
+    endclass : ahb_master_agent
+    typedef uvm_sequencer#(ahb_force_item) ahb_slv_rsp_sequencer;
+    class ahb_slv_rsp_driver extends uvm_driver#(ahb_force_item);
+        `uvm_component_utils(ahb_slv_rsp_driver)
+        virtual ahb_sys_if      vif;
+        virtual ahb_slave_bd_if bd_vif[4];
+        int unsigned force_timeout = 512;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+        endfunction
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            if (!uvm_config_db#(virtual ahb_sys_if)::get(this, "", "vif", vif))
+                `uvm_fatal("CFGDB",
+                    $sformatf("sys vif MISSING for %s", get_full_name()))
+            if (!uvm_config_db#(virtual ahb_slave_bd_if)::get(this, "", "bd_vif_s1", bd_vif[1]))
+                `uvm_fatal("CFGDB",
+                    $sformatf("bd_vif_s1 MISSING for %s", get_full_name()))
+            if (!uvm_config_db#(virtual ahb_slave_bd_if)::get(this, "", "bd_vif_s2", bd_vif[2]))
+                `uvm_fatal("CFGDB",
+                    $sformatf("bd_vif_s2 MISSING for %s", get_full_name()))
+            if (!uvm_config_db#(virtual ahb_slave_bd_if)::get(this, "", "bd_vif_s3", bd_vif[3]))
+                `uvm_fatal("CFGDB",
+                    $sformatf("bd_vif_s3 MISSING for %s", get_full_name()))
+            `uvm_info("CFGDB",
+                $sformatf("sys vif + 3 bd_vif OK for %s", get_full_name()), UVM_LOW)
+        endfunction
+        task run_phase(uvm_phase phase);
+            ahb_force_item req;
+            clear_all_force();
+            wait (vif.HRESETn === 1'b1);
+            forever begin
+                seq_item_port.get_next_item(req);
+                `uvm_info("SLV_RSP_DRV",
+                    $sformatf("accepted %s", req.convert2string()), UVM_MEDIUM)
+                drive_force(req);
+                seq_item_port.item_done();
+            end
+        endtask
+        task clear_all_force();
+            vif.force_split_s1 = 1'b0; vif.force_split_s2 = 1'b0; vif.force_split_s3 = 1'b0;
+            vif.force_retry_s1 = 1'b0; vif.force_retry_s2 = 1'b0; vif.force_retry_s3 = 1'b0;
+        endtask
+        function void set_force(int sid, bit split_on, bit retry_on);
+            case (sid)
+                1: begin vif.force_split_s1 = split_on; vif.force_retry_s1 = retry_on; end
+                2: begin vif.force_split_s2 = split_on; vif.force_retry_s2 = retry_on; end
+                3: begin vif.force_split_s3 = split_on; vif.force_retry_s3 = retry_on; end
+                default: `uvm_error("SLV_RSP_DRV",
+                             $sformatf("set_force bad slave_id=%0d", sid))
+            endcase
+        endfunction
+        task drive_force(ahb_force_item req);
+            int  sid   = req.slave_id;
+            int  bidx  = req.beat_index;
+            int  seen  = 0;
+            bit  fired = 1'b0;
+            int  guard = 0;
+            virtual ahb_slave_bd_if bd = bd_vif[sid];
+            guard = 0;
+            forever begin
+                @(posedge bd.HCLK); #1;
+                if (bd.ps_slave === SLV_ACTIVE) break;
+                if (++guard > force_timeout) begin
+                    `uvm_error("SLV_RSP_DRV",
+                        $sformatf("S%0d: timeout waiting for ST_ACTIVE", sid))
+                    return;
+                end
+            end
+            guard = 0;
+            forever begin
+                @(posedge bd.HCLK); #1;
+                if (bd.ps_slave === SLV_WBURST || bd.ps_slave === SLV_RBURST) begin
+                    if (!fired && seen == bidx) begin
+                        set_force(sid, req.op_split, req.op_retry);
+                        `uvm_info("SLV_RSP_DRV",
+                            $sformatf("S%0d ASSERT force @beat=%0d ps=%s split=%0b retry=%0b",
+                                      sid, seen,
+                                      ahb_slave_bd_item::state_name(bd.ps_slave),
+                                      req.op_split, req.op_retry), UVM_MEDIUM)
+                        fired = 1'b1;
+                    end
+                    seen++;
+                end
+                else if (fired &&
+                         (bd.ps_slave === SLV_LITTLE ||
+                          bd.ps_slave === SLV_RETRY2 ||
+                          bd.ps_slave === SLV_IDLE)) begin
+                    set_force(sid, 1'b0, 1'b0);
+                    `uvm_info("SLV_RSP_DRV",
+                        $sformatf("S%0d RELEASE force @ps=%s",
+                                  sid, ahb_slave_bd_item::state_name(bd.ps_slave)),
+                        UVM_MEDIUM)
+                    break;
+                end
+                if (++guard > force_timeout) begin
+                    set_force(sid, 1'b0, 1'b0);
+                    `uvm_error("SLV_RSP_DRV",
+                        $sformatf("S%0d: timeout during force injection", sid))
+                    break;
+                end
+            end
+        endtask
+    endclass : ahb_slv_rsp_driver
+    class ahb_slv_rsp_agent extends uvm_agent;
+        `uvm_component_utils(ahb_slv_rsp_agent)
+        ahb_slv_rsp_sequencer seqr;
+        ahb_slv_rsp_driver    drv;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+        endfunction
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            if (get_is_active() == UVM_ACTIVE) begin
+                seqr = ahb_slv_rsp_sequencer::type_id::create("seqr", this);
+                drv  = ahb_slv_rsp_driver   ::type_id::create("drv",  this);
+            end
+        endfunction
+        function void connect_phase(uvm_phase phase);
+            super.connect_phase(phase);
+            if (get_is_active() == UVM_ACTIVE) begin
+                drv.seq_item_port.connect(seqr.seq_item_export);
+            end
+        endfunction
+    endclass : ahb_slv_rsp_agent
+    class ahb_slave_bd_monitor extends uvm_monitor;
+        `uvm_component_utils(ahb_slave_bd_monitor)
+        virtual ahb_slave_bd_if vif;
+        uvm_analysis_port#(ahb_slave_bd_item) ap;
+        int unsigned slave_id = 0;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+            ap = new("ap", this);
+        endfunction
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            if (!uvm_config_db#(virtual ahb_slave_bd_if)::get(this, "", "vif", vif))
+                `uvm_fatal("CFGDB",
+                    $sformatf("vif MISSING for %s", get_full_name()))
+            else
+                `uvm_info("CFGDB",
+                    $sformatf("vif OK for %s", get_full_name()), UVM_LOW)
+            void'(uvm_config_db#(int unsigned)::get(this, "", "slave_id", slave_id));
+        endfunction
+        task run_phase(uvm_phase phase);
+            logic [2:0]  prev_ps;
+            logic [1:0]  prev_resp;
+            logic [31:0] prev_mem_at_idx;
+            logic [7:0]  prev_local_addr;
+            logic [31:0] mem_now;
+            logic [2:0]  this_ps;
+            logic [1:0]  this_resp;
+            ahb_slave_bd_item it;
+            int unsigned heartbeat_cnt = 0;
+            wait (vif.HRESETn === 1'b1);
+            `uvm_info("BD_SLV",
+                $sformatf("S%0d  monitor ALIVE — entering sample loop", slave_id),
+                UVM_LOW)
+            @(posedge vif.HCLK);
+            #1;
+            prev_ps         = vif.ps_slave;
+            prev_resp       = vif.HRESP;
+            prev_local_addr = vif.local_addr;
+            prev_mem_at_idx = vif.memory_slave[prev_local_addr];
+            `uvm_info("BD_SLV",
+                $sformatf("S%0d  primed: ps=%s resp=%s local_addr=0x%02h mem[%0d]=0x%08h",
+                          slave_id,
+                          ahb_slave_bd_item::state_name(prev_ps),
+                          ahb_seq_item::resp_name(prev_resp),
+                          prev_local_addr, prev_local_addr, prev_mem_at_idx),
+                UVM_LOW)
+            forever begin
+                @(posedge vif.HCLK);
+                #1;
+                heartbeat_cnt++;
+                if (heartbeat_cnt % 200 == 0) begin
+                    `uvm_info("BD_SLV",
+                        $sformatf("S%0d  heartbeat: %0d cycles, prev_ps=%s",
+                                  slave_id, heartbeat_cnt,
+                                  ahb_slave_bd_item::state_name(prev_ps)),
+                        UVM_HIGH)
+                end
+                this_ps   = vif.ps_slave;
+                this_resp = vif.HRESP;
+                if (this_ps !== prev_ps) begin
+                    it = build_event(EV_STATE_CHG, prev_ps);
+                    `uvm_info("BD_SLV",
+                        $sformatf("S%0d  STATE  %s → %s  (local_addr=0x%02h beat=%0d)",
+                                  slave_id,
+                                  ahb_slave_bd_item::state_name(prev_ps),
+                                  ahb_slave_bd_item::state_name(this_ps),
+                                  vif.local_addr,
+                                  vif.beat_cnt),
+                        UVM_MEDIUM)
+                    ap.write(it);
+                end
+                if (prev_ps == 3'b100 ) begin
+                    mem_now = vif.memory_slave[prev_local_addr];
+                    if (mem_now !== prev_mem_at_idx) begin
+                        it = build_event(EV_MEM_WRITE, prev_ps);
+                        it.mem_idx      = prev_local_addr;
+                        it.mem_data_new = mem_now;
+                        it.mem_data_old = prev_mem_at_idx;
+                        `uvm_info("BD_SLV",
+                            $sformatf("S%0d  MEM_WR mem[0x%02h] 0x%08h → 0x%08h",
+                                      slave_id, prev_local_addr,
+                                      prev_mem_at_idx, mem_now),
+                            UVM_MEDIUM)
+                        ap.write(it);
+                    end
+                end
+                if (this_resp !== prev_resp) begin
+                    it = build_event(EV_RESP_CHG, prev_ps);
+                    it.prev_HRESP = prev_resp;
+                    `uvm_info("BD_SLV",
+                        $sformatf("S%0d  RESP   %s → %s  (HREADYOUT=%0b)",
+                                  slave_id,
+                                  ahb_seq_item::resp_name(prev_resp),
+                                  ahb_seq_item::resp_name(this_resp),
+                                  vif.HREADYOUT),
+                        UVM_MEDIUM)
+                    ap.write(it);
+                end
+                prev_ps         = this_ps;
+                prev_resp       = this_resp;
+                prev_local_addr = vif.local_addr;
+                prev_mem_at_idx = vif.memory_slave[prev_local_addr];
+            end
+        endtask
+        function ahb_slave_bd_item build_event(slv_bd_event_e ev, logic [2:0] before_ps);
+            ahb_slave_bd_item it = ahb_slave_bd_item::type_id::create("bd_evt");
+            it.event_type      = ev;
+            it.slave_id        = slave_id;
+            it.t_event         = $time;
+            it.ps_slave        = vif.ps_slave;
+            it.ns_slave        = vif.ns_slave;
+            it.prev_ps         = before_ps;
+            it.local_addr      = vif.local_addr;
+            it.local_addr_base = vif.local_addr_base;
+            it.beat_cnt        = vif.beat_cnt;
+            it.local_burst     = vif.local_burst;
+            it.local_size      = vif.local_size;
+            it.HRESP           = vif.HRESP;
+            it.HREADYOUT       = vif.HREADYOUT;
+            it.resp_abort      = vif.resp_abort;
+            it.HSPLITx         = vif.HSPLITx;
+            it.HRDATA          = vif.HRDATA;
+            return it;
+        endfunction
+    endclass : ahb_slave_bd_monitor
+    class ahb_slave_bd_mon_agent extends uvm_agent;
+        `uvm_component_utils(ahb_slave_bd_mon_agent)
+        ahb_slave_bd_monitor mon;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+        endfunction
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            mon = ahb_slave_bd_monitor::type_id::create("mon", this);
+        endfunction
+    endclass : ahb_slave_bd_mon_agent
+    class ahb_default_slave_bd_monitor extends uvm_monitor;
+        `uvm_component_utils(ahb_default_slave_bd_monitor)
+        virtual ahb_default_slave_bd_if vif;
+        uvm_analysis_port#(ahb_default_slave_bd_item) ap;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+            ap = new("ap", this);
+        endfunction
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            if (!uvm_config_db#(virtual ahb_default_slave_bd_if)::get(this, "", "vif", vif))
+                `uvm_fatal("CFGDB",
+                    $sformatf("vif MISSING for %s", get_full_name()))
+            else
+                `uvm_info("CFGDB",
+                    $sformatf("vif OK for %s", get_full_name()), UVM_LOW)
+        endfunction
+        task run_phase(uvm_phase phase);
+            logic [1:0] prev_ps;
+            logic       prev_active;
+            ahb_default_slave_bd_item it;
+            wait (vif.HRESETn === 1'b1);
+            `uvm_info("BD_DSLV", "monitor ALIVE — entering sample loop", UVM_LOW)
+            @(posedge vif.HCLK);
+            #1;
+            prev_ps     = vif.ps;
+            prev_active = vif.active_transfer;
+            forever begin
+                @(posedge vif.HCLK);
+                #1;
+                if (vif.ps !== prev_ps) begin
+                    it = build_event(EV_DS_STATE, prev_ps);
+                    `uvm_info("BD_DSLV",
+                        $sformatf("DS  STATE  ps:%0d → %0d  (active=%0b HRESP=%s)",
+                                  prev_ps, vif.ps,
+                                  vif.active_transfer,
+                                  ahb_seq_item::resp_name(vif.HRESP_DEFAULT)),
+                        UVM_MEDIUM)
+                    ap.write(it);
+                    prev_ps = vif.ps;
+                end
+                if (vif.active_transfer === 1'b1 && prev_active !== 1'b1) begin
+                    it = build_event(EV_DS_HIT, prev_ps);
+                    `uvm_warning("BD_DSLV",
+                        $sformatf("DS  HIT — decoder routed to default slave (HRESP=%s)",
+                                  ahb_seq_item::resp_name(vif.HRESP_DEFAULT)))
+                    ap.write(it);
+                end
+                prev_active = vif.active_transfer;
+            end
+        endtask
+        function ahb_default_slave_bd_item build_event(ds_event_e ev, logic [1:0] before_ps);
+            ahb_default_slave_bd_item it = ahb_default_slave_bd_item::type_id::create("ds_evt");
+            it.event_type        = ev;
+            it.t_event           = $time;
+            it.ps                = vif.ps;
+            it.ns                = vif.ns;
+            it.prev_ps           = before_ps;
+            it.active_transfer   = vif.active_transfer;
+            it.HREADYOUT_DEFAULT = vif.HREADYOUT_DEFAULT;
+            it.HRESP_DEFAULT     = vif.HRESP_DEFAULT;
+            return it;
+        endfunction
+    endclass : ahb_default_slave_bd_monitor
+    class ahb_default_slave_bd_mon_agent extends uvm_agent;
+        `uvm_component_utils(ahb_default_slave_bd_mon_agent)
+        ahb_default_slave_bd_monitor mon;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+        endfunction
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            mon = ahb_default_slave_bd_monitor::type_id::create("mon", this);
+        endfunction
+    endclass : ahb_default_slave_bd_mon_agent
+    class ahb_bus_monitor extends uvm_monitor;
+        `uvm_component_utils(ahb_bus_monitor)
+        virtual ahb_sys_if vif;
+        uvm_analysis_port#(ahb_bus_item) ap;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+            ap = new("ap", this);
+        endfunction
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            if (!uvm_config_db#(virtual ahb_sys_if)::get(this, "", "vif", vif))
+                `uvm_fatal("CFGDB",
+                    $sformatf("vif MISSING for %s", get_full_name()))
+            else
+                `uvm_info("CFGDB",
+                    $sformatf("vif OK for %s", get_full_name()), UVM_LOW)
+        endfunction
+        task run_phase(uvm_phase phase);
+            logic [3:0] prev_hmaster;
+            logic [3:0] prev_hsel_bits;
+            logic [3:0] curr_hsel_bits;
+            logic [2:0] prev_fsplit;
+            logic [2:0] prev_fretry;
+            logic [2:0] curr_fsplit;
+            logic [2:0] curr_fretry;
+            ahb_bus_item it;
+            wait (vif.HRESETn === 1'b1);
+            `uvm_info("BD_BUS", "monitor ALIVE — entering sample loop", UVM_LOW)
+            @(posedge vif.HCLK);
+            #1;
+            prev_hmaster   = vif.HMASTER_o;
+            prev_hsel_bits = pack_hsel();
+            prev_fsplit    = {vif.force_split_s3, vif.force_split_s2, vif.force_split_s1};
+            prev_fretry    = {vif.force_retry_s3, vif.force_retry_s2, vif.force_retry_s1};
+            it = build_event(EV_BUS_SNAPSHOT);
+            `uvm_info("BD_BUS",
+                $sformatf("SNAPSHOT  HMASTER=%0d HSEL{DEF,S3,S2,S1}=%4b HADDR_S=0x%08h HTRANS=%0d",
+                          prev_hmaster, prev_hsel_bits,
+                          vif.HADDR_S_o, vif.HTRANS_S_o),
+                UVM_LOW)
+            ap.write(it);
+            forever begin
+                @(posedge vif.HCLK);
+                #1;
+                if (vif.HMASTER_o !== prev_hmaster) begin
+                    it = build_event(EV_MASTER_CHG);
+                    it.prev_HMASTER = prev_hmaster;
+                    `uvm_info("BD_BUS",
+                        $sformatf("MASTER %0d → %0d  (HMASTLOCK=%0b)",
+                                  prev_hmaster, vif.HMASTER_o,
+                                  vif.HMASTLOCK_o),
+                        UVM_MEDIUM)
+                    ap.write(it);
+                    prev_hmaster = vif.HMASTER_o;
+                end
+                curr_hsel_bits = pack_hsel();
+                if (curr_hsel_bits !== prev_hsel_bits) begin
+                    it = build_event(EV_SEL_CHG);
+                    it.prev_HSEL_bits = prev_hsel_bits;
+                    it.curr_HSEL_bits = curr_hsel_bits;
+                    `uvm_info("BD_BUS",
+                        $sformatf("HSEL   {DEF,S3,S2,S1}=%4b → %4b  (HADDR_S=0x%08h HTRANS=%0d)",
+                                  prev_hsel_bits, curr_hsel_bits,
+                                  vif.HADDR_S_o, vif.HTRANS_S_o),
+                        UVM_HIGH)
+                    ap.write(it);
+                    prev_hsel_bits = curr_hsel_bits;
+                end
+                curr_fsplit = {vif.force_split_s3, vif.force_split_s2, vif.force_split_s1};
+                curr_fretry = {vif.force_retry_s3, vif.force_retry_s2, vif.force_retry_s1};
+                if ((curr_fsplit & ~prev_fsplit) != 3'b000 ||
+                    (curr_fretry & ~prev_fretry) != 3'b000) begin
+                    it = build_event(EV_FORCE_HOOK);
+                    it.force_split_pulse = ((curr_fsplit & ~prev_fsplit) != 3'b000);
+                    it.force_retry_pulse = ((curr_fretry & ~prev_fretry) != 3'b000);
+                    `uvm_info("BD_BUS",
+                        $sformatf("FORCE  split=%3b retry=%3b (rising-edge pulse)",
+                                  (curr_fsplit & ~prev_fsplit),
+                                  (curr_fretry & ~prev_fretry)),
+                        UVM_MEDIUM)
+                    ap.write(it);
+                end
+                prev_fsplit = curr_fsplit;
+                prev_fretry = curr_fretry;
+            end
+        endtask
+        function logic [3:0] pack_hsel();
+            return {vif.HSEL_DEFAULT_o,
+                    vif.HSEL_S3_o,
+                    vif.HSEL_S2_o,
+                    vif.HSEL_S1_o};
+        endfunction
+        function ahb_bus_item build_event(bus_event_e ev);
+            ahb_bus_item it = ahb_bus_item::type_id::create("bus_evt");
+            it.event_type   = ev;
+            it.t_event      = $time;
+            it.HMASTER      = vif.HMASTER_o;
+            it.HMASTLOCK    = vif.HMASTLOCK_o;
+            it.HSEL_S1      = vif.HSEL_S1_o;
+            it.HSEL_S2      = vif.HSEL_S2_o;
+            it.HSEL_S3      = vif.HSEL_S3_o;
+            it.HSEL_DEFAULT = vif.HSEL_DEFAULT_o;
+            it.HADDR_S      = vif.HADDR_S_o;
+            it.HTRANS_S     = vif.HTRANS_S_o;
+            it.HWRITE_S     = vif.HWRITE_S_o;
+            return it;
+        endfunction
+    endclass : ahb_bus_monitor
+    class ahb_bus_mon_agent extends uvm_agent;
+        `uvm_component_utils(ahb_bus_mon_agent)
+        ahb_bus_monitor mon;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+        endfunction
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            mon = ahb_bus_monitor::type_id::create("mon", this);
+        endfunction
+    endclass : ahb_bus_mon_agent
+    `uvm_analysis_imp_decl(_m1)
+    `uvm_analysis_imp_decl(_m2)
+    `uvm_analysis_imp_decl(_s1)
+    `uvm_analysis_imp_decl(_s2)
+    `uvm_analysis_imp_decl(_s3)
+    `uvm_analysis_imp_decl(_default_slv)
+    `uvm_analysis_imp_decl(_bus)
+    class ahb_virtual_sequencer extends uvm_sequencer;
+        `uvm_component_utils(ahb_virtual_sequencer)
+        ahb_master_sequencer   m1_seqr_h;
+        ahb_master_sequencer   m2_seqr_h;
+        ahb_slv_rsp_sequencer  slv_rsp_seqr_h;
+        function new(string name, uvm_component parent);
+            super.new(name, parent);
+        endfunction
+    endclass : ahb_virtual_sequencer

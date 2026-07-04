@@ -1,0 +1,161 @@
+// testbench.sv -- M5b main file (REQUIRED name in EDA Playground)
+// Pulls in every other tab via `include. See run guide for exact tab order.
+`include "ahb_interfaces.svh"
+package ahb_pkg;
+    import uvm_pkg::*;
+    `include "uvm_macros.svh"
+    parameter logic [1:0] T_IDLE   = 2'b00;
+    parameter logic [1:0] T_BUSY   = 2'b01;
+    parameter logic [1:0] T_NONSEQ = 2'b10;
+    parameter logic [1:0] T_SEQ    = 2'b11;
+    parameter logic [2:0] B_SINGLE = 3'b000;
+    parameter logic [2:0] B_INCR   = 3'b001;
+    parameter logic [2:0] B_WRAP4  = 3'b010;
+    parameter logic [2:0] B_INCR4  = 3'b011;
+    parameter logic [2:0] B_WRAP8  = 3'b100;
+    parameter logic [2:0] B_INCR8  = 3'b101;
+    parameter logic [2:0] B_WRAP16 = 3'b110;
+    parameter logic [2:0] B_INCR16 = 3'b111;
+    parameter logic [2:0] SZ_BYTE     = 3'b000;
+    parameter logic [2:0] SZ_HALFWORD = 3'b001;
+    parameter logic [2:0] SZ_WORD     = 3'b010;
+    parameter logic [1:0] R_OKAY  = 2'b00;
+    parameter logic [1:0] R_ERROR = 2'b01;
+    parameter logic [1:0] R_RETRY = 2'b10;
+    parameter logic [1:0] R_SPLIT = 2'b11;
+    parameter logic [2:0] SLV_IDLE   = 3'b000;
+    parameter logic [2:0] SLV_ACTIVE = 3'b001;
+    parameter logic [2:0] SLV_RETRY2 = 3'b010;
+    parameter logic [2:0] SLV_LITTLE = 3'b011;
+    parameter logic [2:0] SLV_WBURST = 3'b100;
+    parameter logic [2:0] SLV_RBURST = 3'b101;
+    parameter int SEED_S1 = 10;
+    parameter int SEED_S2 = 20;
+    parameter int SEED_S3 = 30;
+    typedef enum bit {AHB_READ = 1'b0, AHB_WRITE = 1'b1} ahb_dir_e;
+    `include "ahb_pkg_items.svh"
+    `include "ahb_pkg_agents.svh"
+    `include "ahb_pkg_scoreboard.svh"
+    `include "ahb_pkg_sequences.svh"
+    `include "ahb_pkg_tests.svh"
+endpackage : ahb_pkg
+
+module tb_top;
+    import uvm_pkg::*;
+    import ahb_pkg::*;
+    `include "uvm_macros.svh"
+    logic HCLK;
+    logic HRESETn;
+    initial HCLK = 1'b0;
+    always #5 HCLK = ~HCLK;
+    ahb_master_if           m1_if  (.HCLK(HCLK), .HRESETn(HRESETn));
+    ahb_master_if           m2_if  (.HCLK(HCLK), .HRESETn(HRESETn));
+    ahb_sys_if              sys_if (.HCLK(HCLK), .HRESETn(HRESETn));
+
+    AHB_System_Top #(
+        .SEED_S1(SEED_S1),
+        .SEED_S2(SEED_S2),
+        .SEED_S3(SEED_S3)
+    ) u_dut (
+        .HCLK            (HCLK),
+        .HRESETn         (HRESETn),
+        .HBUSREQ_M1      (m1_if.HBUSREQ),
+        .HLOCK_M1        (m1_if.HLOCK),
+        .HADDR_M1        (m1_if.HADDR),
+        .HWDATA_M1       (m1_if.HWDATA),
+        .HTRANS_M1       (m1_if.HTRANS),
+        .HWRITE_M1       (m1_if.HWRITE),
+        .HSIZE_M1        (m1_if.HSIZE),
+        .HBURST_M1       (m1_if.HBURST),
+        .HGRANT_M1       (m1_if.HGRANT),
+        .HBUSREQ_M2      (m2_if.HBUSREQ),
+        .HLOCK_M2        (m2_if.HLOCK),
+        .HADDR_M2        (m2_if.HADDR),
+        .HWDATA_M2       (m2_if.HWDATA),
+        .HTRANS_M2       (m2_if.HTRANS),
+        .HWRITE_M2       (m2_if.HWRITE),
+        .HSIZE_M2        (m2_if.HSIZE),
+        .HBURST_M2       (m2_if.HBURST),
+        .HGRANT_M2       (m2_if.HGRANT),
+        .HRDATA_M        (m1_if.HRDATA_M),
+        .HRESP_M         (m1_if.HRESP_M),
+        .HREADY          (m1_if.HREADY),
+        .force_split_s1  (sys_if.force_split_s1),
+        .force_retry_s1  (sys_if.force_retry_s1),
+        .force_split_s2  (sys_if.force_split_s2),
+        .force_retry_s2  (sys_if.force_retry_s2),
+        .force_split_s3  (sys_if.force_split_s3),
+        .force_retry_s3  (sys_if.force_retry_s3),
+        .HADDR_S_o       (sys_if.HADDR_S_o),
+        .HTRANS_S_o      (sys_if.HTRANS_S_o),
+        .HWRITE_S_o      (sys_if.HWRITE_S_o),
+        .HSIZE_S_o       (sys_if.HSIZE_S_o),
+        .HBURST_S_o      (sys_if.HBURST_S_o),
+        .HMASTER_o       (sys_if.HMASTER_o),
+        .HMASTLOCK_o     (sys_if.HMASTLOCK_o),
+        .HREADY_GLOBAL_o (sys_if.HREADY_GLOBAL_o),
+        .HSEL_S1_o       (sys_if.HSEL_S1_o),
+        .HSEL_S2_o       (sys_if.HSEL_S2_o),
+        .HSEL_S3_o       (sys_if.HSEL_S3_o),
+        .HSEL_DEFAULT_o  (sys_if.HSEL_DEFAULT_o),
+        .HSPLIT_S1_o     (sys_if.HSPLIT_S1_o),
+        .HSPLIT_S2_o     (sys_if.HSPLIT_S2_o),
+        .HSPLIT_S3_o     (sys_if.HSPLIT_S3_o)
+    );
+
+    assign m2_if.HRDATA_M = m1_if.HRDATA_M;
+    assign m2_if.HRESP_M  = m1_if.HRESP_M;
+    assign m2_if.HREADY   = m1_if.HREADY;
+    initial begin
+        HRESETn = 1'b0;
+        repeat (5) @(posedge HCLK);
+        HRESETn = 1'b1;
+        `uvm_info("TB_TOP", "HRESETn deasserted — system live", UVM_LOW)
+    end
+
+    initial begin
+        uvm_config_db#(virtual ahb_master_if)::set(
+            null, "uvm_test_top.env.m1_agent*",      "vif", m1_if);
+        uvm_config_db#(virtual ahb_master_if)::set(
+            null, "uvm_test_top.env.m2_agent*",      "vif", m2_if);
+        uvm_config_db#(virtual ahb_sys_if)::set(
+            null, "uvm_test_top.env.slv_rsp_agent*", "vif", sys_if);
+        uvm_config_db#(virtual ahb_slave_bd_if)::set(
+            null, "uvm_test_top.env.slv_rsp_agent*", "bd_vif_s1", u_dut.u_slave1.u_bd);
+        uvm_config_db#(virtual ahb_slave_bd_if)::set(
+            null, "uvm_test_top.env.slv_rsp_agent*", "bd_vif_s2", u_dut.u_slave2.u_bd);
+        uvm_config_db#(virtual ahb_slave_bd_if)::set(
+            null, "uvm_test_top.env.slv_rsp_agent*", "bd_vif_s3", u_dut.u_slave3.u_bd);
+        uvm_config_db#(virtual ahb_slave_bd_if)::set(
+            null, "uvm_test_top.env.s1_mon_agent*",      "vif", u_dut.u_slave1.u_bd);
+        uvm_config_db#(virtual ahb_slave_bd_if)::set(
+            null, "uvm_test_top.env.s2_mon_agent*",      "vif", u_dut.u_slave2.u_bd);
+        uvm_config_db#(virtual ahb_slave_bd_if)::set(
+            null, "uvm_test_top.env.s3_mon_agent*",      "vif", u_dut.u_slave3.u_bd);
+        uvm_config_db#(virtual ahb_default_slave_bd_if)::set(
+            null, "uvm_test_top.env.default_mon_agent*", "vif", u_dut.u_default_slave.u_bd);
+        uvm_config_db#(virtual ahb_sys_if)::set(
+            null, "uvm_test_top.env.bus_mon_agent*", "vif", sys_if);
+    end
+
+    initial begin
+        `uvm_info("TB_TOP",
+            "==============================================================", UVM_LOW)
+        `uvm_info("TB_TOP",
+            "  AHB 2.0 UVM Testbench — Milestone M5b (SPLIT/RETRY force hooks)", UVM_LOW)
+        `uvm_info("TB_TOP",
+            "  Default test: ahb_smoke_test  (use +UVM_TESTNAME to override)", UVM_LOW)
+        `uvm_info("TB_TOP",
+            "==============================================================", UVM_LOW)
+        run_test("ahb_smoke_test");
+    end
+
+    initial begin
+        #50us;
+        `uvm_fatal("TB_TOP", "Global timeout — RTL/TB hang detected")
+    end
+    initial begin
+        $dumpfile("dump.vcd");
+        $dumpvars(0, tb_top);
+    end
+endmodule : tb_top

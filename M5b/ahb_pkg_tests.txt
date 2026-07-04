@@ -1,0 +1,259 @@
+// ahb_pkg_tests.svh -- M5b -- tests (include CUOI CUNG trong package)
+    class ahb_base_test extends uvm_test;
+        `uvm_component_utils(ahb_base_test)
+        ahb_env env;
+
+        function new(string name = "ahb_base_test",
+                     uvm_component parent = null);
+            super.new(name, parent);
+        endfunction
+
+        function void build_phase(uvm_phase phase);
+            super.build_phase(phase);
+            env = ahb_env::type_id::create("env", this);
+        endfunction
+
+        function void end_of_elaboration_phase(uvm_phase phase);
+            super.end_of_elaboration_phase(phase);
+            uvm_top.print_topology();
+        endfunction
+
+        task run_phase(uvm_phase phase);
+            super.run_phase(phase);
+        endtask
+
+    endclass : ahb_base_test
+
+    class ahb_smoke_test extends ahb_base_test;
+        `uvm_component_utils(ahb_smoke_test)
+
+        function new(string name = "ahb_smoke_test",
+                     uvm_component parent = null);
+            super.new(name, parent);
+        endfunction
+
+        task run_phase(uvm_phase phase);
+            ahb_m3_smoke_vseq vseq;
+            phase.raise_objection(this, "M3 smoke vseq");
+            phase.phase_done.set_drain_time(this, 500ns);
+            vseq = ahb_m3_smoke_vseq::type_id::create("smoke_vseq");
+            vseq.start(env.v_seqr);
+            #200ns;
+            phase.drop_objection(this, "M3 smoke vseq done");
+        endtask
+
+    endclass : ahb_smoke_test
+
+    class ahb_single_test extends ahb_base_test;
+        `uvm_component_utils(ahb_single_test)
+
+        function new(string name = "ahb_single_test", uvm_component parent = null);
+            super.new(name, parent);
+        endfunction
+
+        task run_phase(uvm_phase phase);
+            ahb_write_single_seq w;
+            ahb_read_single_seq  r;
+            string dir_s  = "WR";
+            int    base_v = 32'h0000_0004;
+            int    exp_v  = 0;
+            phase.raise_objection(this, "single_test");
+            phase.phase_done.set_drain_time(this, 500ns);
+            void'($value$plusargs("DIR=%s",   dir_s));
+            void'($value$plusargs("BASE=%h",  base_v));
+            void'($value$plusargs("EXP_INIT=%h", exp_v));
+            `uvm_info("CFG", $sformatf("single_test: DIR=%s BASE=0x%08h EXP_INIT=0x%08h",
+                                        dir_s, base_v, exp_v), UVM_LOW)
+            #200ns;
+            case (dir_s)
+                "W" : begin
+                    w = ahb_write_single_seq::type_id::create("w");
+                    w.addr  = base_v;
+                    w.wdata = 32'hDEAD_BEEF;
+                    w.start(env.v_seqr.m1_seqr_h);
+                end
+                "R" : begin
+                    r = ahb_read_single_seq::type_id::create("r");
+                    r.addr = base_v;
+                    r.start(env.v_seqr.m1_seqr_h);
+                    if (exp_v != 0 && r.rdata !== exp_v[31:0])
+                        `uvm_error("T1_RD",
+                            $sformatf("initial mismatch exp=0x%08h got=0x%08h", exp_v, r.rdata))
+                    else
+                        `uvm_info("T1_RD", $sformatf("rdata=0x%08h OK", r.rdata), UVM_LOW)
+                end
+
+                "WR" : begin
+                    w = ahb_write_single_seq::type_id::create("w");
+                    w.addr  = base_v;
+                    w.wdata = 32'hCAFE_BABE;
+                    w.start(env.v_seqr.m1_seqr_h);
+                    #50ns;
+                    r = ahb_read_single_seq::type_id::create("r");
+                    r.addr = base_v;
+                    r.start(env.v_seqr.m1_seqr_h);
+                    if (r.rdata !== 32'hCAFE_BABE)
+                        `uvm_error("T1_WR", $sformatf("WR mismatch exp=0xCAFEBABE got=0x%08h", r.rdata))
+                    else
+                        `uvm_info("T1_WR", "write-read-back OK", UVM_LOW)
+                end
+                default : `uvm_error("CFG", $sformatf("unknown DIR='%s'", dir_s))
+            endcase
+            #200ns;
+            phase.drop_objection(this, "single_test done");
+        endtask
+
+    endclass : ahb_single_test
+
+    class ahb_burst_test extends ahb_base_test;
+        `uvm_component_utils(ahb_burst_test)
+
+        function new(string name = "ahb_burst_test", uvm_component parent = null);
+            super.new(name, parent);
+        endfunction
+
+        function logic [2:0] parse_burst(string s);
+            case (s)
+                "SINGLE" : return B_SINGLE;
+                "INCR"   : return B_INCR;
+                "WRAP4"  : return B_WRAP4;
+                "INCR4"  : return B_INCR4;
+                "WRAP8"  : return B_WRAP8;
+                "INCR8"  : return B_INCR8;
+                "WRAP16" : return B_WRAP16;
+                "INCR16" : return B_INCR16;
+                default  : begin
+                    `uvm_warning("CFG", $sformatf("unknown BURST '%s', default INCR4", s))
+                    return B_INCR4;
+                end
+            endcase
+        endfunction
+
+        function burst_pat_e parse_pattern(string s);
+            case (s)
+                "DEAD"  : return PAT_DEAD;
+                "INDEX" : return PAT_INDEX;
+                "RAND"  : return PAT_RAND;
+                default : return PAT_DEAD;
+            endcase
+        endfunction
+
+        task run_phase(uvm_phase phase);
+            ahb_burst_writeread_vseq vseq;
+            string  burst_s   = "INCR4";
+            string  dir_s     = "WR";
+            string  pat_s     = "DEAD";
+            int     base_v    = 32'h0000_0010;
+            phase.raise_objection(this, "burst_test");
+            phase.phase_done.set_drain_time(this, 500ns);
+            void'($value$plusargs("BURST=%s",   burst_s));
+            void'($value$plusargs("DIR=%s",     dir_s));
+            void'($value$plusargs("BASE=%h",    base_v));
+            void'($value$plusargs("PATTERN=%s", pat_s));
+            `uvm_info("CFG", $sformatf("burst_test: BURST=%s DIR=%s BASE=0x%08h PAT=%s",
+                                        burst_s, dir_s, base_v, pat_s), UVM_LOW)
+            #200ns;
+            vseq = ahb_burst_writeread_vseq::type_id::create("vseq");
+            vseq.base_addr  = base_v;
+            vseq.burst_type = parse_burst(burst_s);
+            vseq.pattern    = parse_pattern(pat_s);
+            case (dir_s)
+                "W"  : begin vseq.do_write = 1; vseq.do_read = 0; end
+                "R"  : begin vseq.do_write = 0; vseq.do_read = 1; end
+                "WR" : begin vseq.do_write = 1; vseq.do_read = 1; end
+                default : begin
+                    `uvm_warning("CFG", $sformatf("unknown DIR '%s', default WR", dir_s))
+                    vseq.do_write = 1; vseq.do_read = 1;
+                end
+            endcase
+            vseq.start(env.v_seqr);
+            #200ns;
+            phase.drop_objection(this, "burst_test done");
+        endtask
+
+    endclass : ahb_burst_test
+
+    class ahb_force_test extends ahb_base_test;
+        `uvm_component_utils(ahb_force_test)
+
+        function new(string name = "ahb_force_test", uvm_component parent = null);
+            super.new(name, parent);
+        endfunction
+
+        function int decode_sid(logic [31:0] a);
+            case (a[31:30])
+                2'b00:   return 1;
+                2'b01:   return 2;
+                2'b10:   return 3;
+                default: return 1;
+            endcase
+        endfunction
+
+        task run_phase(uvm_phase phase);
+            ahb_force_single_vseq vseq;
+            string op_s   = "SPLIT";
+            string dir_s  = "R";
+            int    base_v = 32'h0000_0040;
+            int    lock_v = 0;
+            phase.raise_objection(this, "force_test");
+            phase.phase_done.set_drain_time(this, 500ns);
+            void'($value$plusargs("OP=%s",   op_s));
+            void'($value$plusargs("DIR=%s",  dir_s));
+            void'($value$plusargs("BASE=%h", base_v));
+            void'($value$plusargs("LOCK=%d", lock_v));
+            `uvm_info("CFG",
+                $sformatf("force_test: OP=%s DIR=%s BASE=0x%08h LOCK=%0d",
+                          op_s, dir_s, base_v, lock_v), UVM_LOW)
+            #200ns;
+            vseq = ahb_force_single_vseq::type_id::create("vseq");
+            vseq.slave_id  = decode_sid(base_v);
+            vseq.op_split  = (op_s == "SPLIT" || op_s == "BOTH");
+            vseq.op_retry  = (op_s == "RETRY" || op_s == "BOTH");
+            vseq.is_write  = (dir_s == "W");
+            vseq.base_addr = base_v;
+            vseq.lock      = (lock_v != 0);
+            vseq.start(env.v_seqr);
+            #200ns;
+            phase.drop_objection(this, "force_test done");
+        endtask
+
+    endclass : ahb_force_test
+
+    class ahb_back2back_test extends ahb_base_test;
+        `uvm_component_utils(ahb_back2back_test)
+
+        function new(string name = "ahb_back2back_test", uvm_component parent = null);
+            super.new(name, parent);
+        endfunction
+
+        task run_phase(uvm_phase phase);
+            ahb_write_single_seq w1, w2;
+            ahb_read_single_seq  r1, r2;
+            phase.raise_objection(this, "back2back");
+            phase.phase_done.set_drain_time(this, 500ns);
+            #200ns;
+            w1 = ahb_write_single_seq::type_id::create("w1");
+            w1.addr = 32'h0000_0030; w1.wdata = 32'hCAFE_0001;
+            w1.start(env.v_seqr.m1_seqr_h);
+            w2 = ahb_write_single_seq::type_id::create("w2");
+            w2.addr = 32'h0000_0034; w2.wdata = 32'hCAFE_0002;
+            w2.start(env.v_seqr.m1_seqr_h);
+            r1 = ahb_read_single_seq::type_id::create("r1");
+            r1.addr = 32'h0000_0030;
+            r1.start(env.v_seqr.m1_seqr_h);
+            if (r1.rdata !== 32'hCAFE_0001)
+                `uvm_error("T1_12",
+                    $sformatf("word12 exp=0xCAFE0001 got=0x%08h", r1.rdata))
+            r2 = ahb_read_single_seq::type_id::create("r2");
+            r2.addr = 32'h0000_0034;
+            r2.start(env.v_seqr.m1_seqr_h);
+            if (r2.rdata !== 32'hCAFE_0002)
+                `uvm_error("T1_12",
+                    $sformatf("word13 exp=0xCAFE0002 got=0x%08h", r2.rdata))
+            else
+                `uvm_info("T1_12", "back-to-back writes verified (both words OK)", UVM_LOW)
+            #200ns;
+            phase.drop_objection(this, "back2back done");
+        endtask
+
+    endclass : ahb_back2back_test
