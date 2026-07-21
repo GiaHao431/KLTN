@@ -1,0 +1,820 @@
+//=============================================================================
+// File      : ahb_pkg_coverage.svh
+// Purpose   : Functional Coverage Collector cho AHB 2.0 Multi-Master Interconnect
+// Giai doan : Phase 2 - Ngay 1 (khung suon / skeleton da duoc rao loi toan dien)
+//
+//-----------------------------------------------------------------------------
+// GIAI THICH DON GIAN CHO NGUOI MOI (theo yeu cau Instruction muc 3):
+//
+//   * "Functional Coverage" tra loi cau hoi: trong suot qua trinh chay test,
+//     nhung TINH HUONG QUAN TRONG (vi du: Master 1 duoc cap bus, Slave dang
+//     ghi burst, SPLIT xay ra giua chung...) da THUC SU xay ra it nhat 1 lan
+//     hay chua. No KHAC voi "test PASS/FAIL": mot test co the PASS nhung chua
+//     bao gio cham toi tinh huong hiem. Coverage giup phat hien "lo hong" do.
+//
+//   * "Covergroup" = mot nhom cac diem can theo doi (giong 1 to khai). Ben
+//     trong no la cac "coverpoint" = tung diem cu the (vi du: Slave dang o
+//     trang thai nao). Moi coverpoint chia thanh cac "bin" = cac gia tri/ o
+//     ma ta muon danh dau "da tung thay". Khi ta goi .sample(), covergroup
+//     nhin gia tri hien tai va tich vao dung o.
+//
+//   * "Cross" = giao 2 coverpoint. Vi du cross(Master, Region) kiem tra:
+//     moi Master da tung cham toi moi vung dia chi chua (M1xS1, M1xS2, ...).
+//
+//   * Component nay (ahb_coverage_collector) giong "nguoi quan sat" dung ben
+//     canh testbench: KHONG dieu khien DUT, chi DOC tin hieu va DEM.
+//
+//-----------------------------------------------------------------------------
+// NGUYEN TAC THIET KE (theo tai lieu 30 + kien truc muc 3.6):
+//   1) CONG THEM HOAN TOAN - khong sua 1 dong nao trong agent/monitor/driver/
+//      scoreboard/RTL. File nay hoan toan moi.
+//   2) Lay du lieu tu 2 nguon song song:
+//        - Doc truc tiep virtual interface (vif) moi chu ky clock  -> nhom
+//          "tung chu ky" (FSM, arbiter, force, decoder, mux).
+//        - Nhan qua TLM analysis port (fanout tu m1/m2 monitor)     -> nhom
+//          "giao dich" (cg_txn).
+//   3) SAMPLING BAT BUOC theo pattern chong loi Xcelium #1step tren bind:
+//          @(posedge vif.HCLK);  #1;  <goi .sample(...)>;
+//      Ly do "#1": tin hieu di qua `bind` neu doc dung luc canh clock co the
+//      bi "cu" (gia tri chu ky truoc). Doi 1 don vi thoi gian cho gia tri
+//      moi on dinh roi moi doc. Ap dung dong bo cho MOI vong sample.
+//
+//-----------------------------------------------------------------------------
+// CAC LOI DA DUOC RAO TRUOC TRONG BAN NAY (so voi ban skeleton dau tien):
+//   [Fix 1] 4 nhom Slave/Force can 3 instance (S1/S2/S3). Ban dau chi new()
+//           1 lan -> chi do duoc 1 slave. Nay dung WRAPPER CLASS (cov_slave_*,
+//           cov_force) roi new() 3 lan -> phu ca 3 slave, tranh xung dot
+//           ten-type/ten-handle cua covergroup (mot cai bay cu phap SV).
+//   [Fix 2] illegal_bins ... = default; la CU PHAP SAI trong SystemVerilog.
+//           Doi sang: illegal_bins multi = {[0:15]} with ($countones(item)>1);
+//           (bat moi gia tri co >1 bit len = khong phai one-hot).
+//   [Fix 3] Chua construct imp_m1/imp_m2 -> them new() trong build_phase.
+//           Neu quen, noi TLM se null -> loi runtime.
+//   [Fix 4] Construct covergroup trong build_phase (SAU khi lay vif) thay vi
+//           trong new(). Dong thoi doi tat ca covergroup sang dang
+//           "with function sample(...)" -> KHONG covergroup nao nhung vif
+//           truc tiep -> loai bo hoan toan rui ro "vif null luc construct".
+//   [Fix 5] cp_grant lay dung {m1_vif.HGRANT, m2_vif.HGRANT} (qua tham so),
+//           khong dung HMASTER_o de suy ra (giu 1 nguon/1 coverpoint).
+//
+//-----------------------------------------------------------------------------
+// GIA DINH DA XAC NHAN (State assumptions explicitly - CLAUDE.md muc 1):
+//   (A) cp_hwrite (nhom Slave) — DA SUA sau khi chay thuc te tren Questa
+//       (Ngay 2, sau khi Ngay 1 pass "gia"). Ban dau: file du an
+//       ahb_slave_bd_if.txt cho thay port local_write DA CO SAN, nen ban dau
+//       file nay sample TRUC TIEP local_write. Nhung khi nap thiet ke tren
+//       Questa VM that, gap Fatal "Virtual interface elem. 'local_write' not
+//       found in 'ahb_slave_bd_if'" — chung to ban ahb_interfaces.sv DANG
+//       THUC SU duoc compile tren may (co the chua dong bo voi file du an
+//       da doc) KHONG expose local_write nhu tuong. Bang chung luc chay
+//       (runtime) dang tin hon file tham khao tinh, nen quay LAI DUNG
+//       phuong an GOC cua tai lieu 30/Testplan: SUY LUAN huong doc/ghi tu
+//       ps_slave — khong doc local_write nua, khong can bat ky thay doi
+//       RTL/interface nao. Co so: doc lai RTL AHB_Slave that (SEQ BLOCK
+//       ST_WBURST/ST_RBURST) xac nhan MOI burst — ke ca SINGLE — deu di qua
+//       dung ST_WBURST khi ghi hoac ST_RBURST khi doc, khong co truong hop
+//       mo ho. Chi tiet xem chu thich tai sample_slave_group() va wrapper
+//       cov_slave_if ben duoi.
+//   (B) cg_force duoc THAM SO HOA 3 instance (S1/S2/S3) - vi force_split_sN/
+//       force_retry_sN tach rieng theo slave. Tai lieu 30 khong noi ro; day
+//       la lua chon thiet ke de nhat quan voi nhom Slave.
+//
+// TRANG THAI: Ngay 1 (khung) + Ngay 2 (noi logic sample that, sua GIA DINH A)
+// hoan tat. Da kiem tra: can bang khoi/ngoac, doi chieu tin hieu vif voi
+// interface that, doi chieu tham so sample() voi khai bao covergroup.
+//=============================================================================
+
+
+//=============================================================================
+// PHAN A - CAC WRAPPER CLASS cho nhom can 3 instance (S1/S2/S3)
+//
+// Vi sao can wrapper? Trong SystemVerilog, khi khai bao "covergroup cg;" ben
+// trong 1 class, cai ten "cg" vua la TEN KIEU vua la 1 handle ngam -> rat kho
+// tao mang 3 instance ma van tuong thich moi simulator. Cach chac chan nhat:
+// dat covergroup + ham sample() vao 1 class nho, roi tao 3 doi tuong cua class
+// do. Moi doi tuong tu giu 1 covergroup rieng cho 1 slave.
+//=============================================================================
+
+// --- Wrapper 1: Slave FSM (may trang thai ben trong AHB_Slave) ---------------
+class cov_slave_fsm;
+    // cg do: FSM da di qua du 6 trang thai hop le chua, va di theo cac "duong"
+    // chuyen trang thai nao (dac biet duong bi SPLIT/RETRY giua burst).
+    covergroup cg with function sample(logic [2:0] ps);
+        option.per_instance = 1;
+        cp_ps_slave: coverpoint ps {
+            bins st_idle   = {SLV_IDLE};
+            bins st_active = {SLV_ACTIVE};
+            bins st_wburst = {SLV_WBURST};
+            bins st_rburst = {SLV_RBURST};
+            bins st_little = {SLV_LITTLE};
+            bins st_retry2 = {SLV_RETRY2};
+            ignore_bins reserved = {3'b110, 3'b111}; // ver4 chi dung 6 state
+        }
+        cp_fsm_trans: coverpoint ps {
+            bins idle_to_active   = (SLV_IDLE   => SLV_ACTIVE);
+            bins active_to_wburst = (SLV_ACTIVE => SLV_WBURST);
+            bins active_to_rburst = (SLV_ACTIVE => SLV_RBURST);
+            bins wburst_to_retry2 = (SLV_WBURST => SLV_RETRY2);
+            bins rburst_to_retry2 = (SLV_RBURST => SLV_RETRY2);
+            bins wburst_to_little = (SLV_WBURST => SLV_LITTLE);
+            bins rburst_to_little = (SLV_RBURST => SLV_LITTLE);
+            bins little_to_idle   = (SLV_LITTLE => SLV_IDLE);
+            bins retry2_to_idle   = (SLV_RETRY2 => SLV_IDLE);
+            bins wburst_to_idle   = (SLV_WBURST => SLV_IDLE);
+            bins rburst_to_idle   = (SLV_RBURST => SLV_IDLE);
+        }
+    endgroup
+    function new(string inst_name);
+        cg = new();
+        cg.set_inst_name(inst_name); // vi du "S1" -> report tach rieng tung slave
+    endfunction
+    function void sample(logic [2:0] ps);
+        cg.sample(ps);
+    endfunction
+    function real get_cov();
+        return cg.get_inst_coverage();
+    endfunction
+    // In chi tiet tung coverpoint cua nhom FSM (goi trong report_phase).
+    function void report_detail(string tag);
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_ps_slave   = %6.2f %%", tag, cg.cp_ps_slave.get_inst_coverage()),  UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_fsm_trans  = %6.2f %%", tag, cg.cp_fsm_trans.get_inst_coverage()), UVM_LOW)
+    endfunction
+endclass : cov_slave_fsm
+
+// --- Wrapper 2: Slave Interface (burst / read-write / dia chi) ----------------
+class cov_slave_if;
+    // in_data_phase = 1 khi FSM dang o ST_WBURST hoac ST_RBURST (dang truyen
+    //                 du lieu). Dung lam guard cho hburst/hwrite/addr vi:
+    //                 (1) local_burst/local_addr da duoc chot va giu on dinh
+    //                     tu ST_ACTIVE xuyen suot ca burst - doc luc nay van
+    //                     dung gia tri;
+    //                 (2) hwrite o day la SUY LUAN tu ps_slave (xem GIA DINH
+    //                     (A) sua lai o dau file) - chi phan biet duoc doc/ghi
+    //                     KHI dang o WBURST(ghi)/RBURST(doc), khong the phan
+    //                     biet luc con o ST_ACTIVE (dia chi vua toi, chua
+    //                     dispatch). Vi vay doi guard tu ST_ACTIVE sang day.
+    // hsel_ready    = 1 khi slave duoc chon va san sang (dung guard cho HTRANS)
+    covergroup cg with function sample(logic [1:0] htrans, logic [2:0] hburst,
+                                        logic hwrite,     logic [7:0] addr,
+                                        bit in_data_phase, bit hsel_ready);
+        option.per_instance = 1;
+        cp_htrans: coverpoint htrans iff (hsel_ready) {
+            bins idle   = {T_IDLE};
+            bins nonseq = {T_NONSEQ};
+            bins seq    = {T_SEQ};
+            ignore_bins busy = {T_BUSY}; // BFM chua drive BUSY -> lo hong da biet, khai bao tuong minh
+        }
+        cp_hburst: coverpoint hburst iff (in_data_phase) {
+            bins single = {B_SINGLE}; bins incr   = {B_INCR};
+            bins wrap4  = {B_WRAP4};  bins incr4  = {B_INCR4};
+            bins wrap8  = {B_WRAP8};  bins incr8  = {B_INCR8};
+            bins wrap16 = {B_WRAP16}; bins incr16 = {B_INCR16};
+        }
+        cp_hwrite: coverpoint hwrite iff (in_data_phase) { bins read = {0}; bins write = {1}; }
+        cross_write_x_burst: cross cp_hwrite, cp_hburst;
+        cp_addr_range: coverpoint addr iff (in_data_phase) {
+            bins zero = {0};          // dia chi 0 -> dung de kich hoat SPLIT
+            bins low  = {[1:15]};
+            bins mid  = {[16:239]};
+            bins high = {[240:254]};
+            bins last = {255};
+        }
+    endgroup
+    function new(string inst_name);
+        cg = new();
+        cg.set_inst_name(inst_name);
+    endfunction
+    function void sample(logic [1:0] htrans, logic [2:0] hburst, logic hwrite,
+                         logic [7:0] addr, bit in_data_phase, bit hsel_ready);
+        cg.sample(htrans, hburst, hwrite, addr, in_data_phase, hsel_ready);
+    endfunction
+    function real get_cov();
+        return cg.get_inst_coverage();
+    endfunction
+    function void report_detail(string tag);
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_htrans          = %6.2f %%", tag, cg.cp_htrans.get_inst_coverage()),           UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_hburst          = %6.2f %%", tag, cg.cp_hburst.get_inst_coverage()),           UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_hwrite          = %6.2f %%", tag, cg.cp_hwrite.get_inst_coverage()),           UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cross_write_x_burst= %6.2f %%", tag, cg.cross_write_x_burst.get_inst_coverage()), UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_addr_range      = %6.2f %%", tag, cg.cp_addr_range.get_inst_coverage()),       UVM_LOW)
+    endfunction
+endclass : cov_slave_if
+
+// --- Wrapper 3: Slave Response (OKAY/RETRY/SPLIT + xung HSPLITx) --------------
+class cov_slave_resp;
+    // hselx        = slave nay dang duoc chon (guard cho HRESP)
+    // hsplit_pulse = |HSPLIT_Sx_o (OR 16 bit) cua slave nay, dung bat xung 1 chu ky
+    covergroup cg with function sample(logic [1:0] hresp, bit hsplit_pulse, bit hselx);
+        option.per_instance = 1;
+        cp_hresp_slave: coverpoint hresp iff (hselx) {
+            bins okay  = {R_OKAY};
+            bins retry = {R_RETRY};
+            bins split = {R_SPLIT};
+            ignore_bins error = {R_ERROR}; // slave thuong khong tu phat ERROR (chi Default Slave)
+        }
+        cp_hsplitx: coverpoint hsplit_pulse {
+            bins pulse = (1'b0 => 1'b1 => 1'b0); // xung phai rong dung 1 chu ky
+        }
+    endgroup
+    function new(string inst_name);
+        cg = new();
+        cg.set_inst_name(inst_name);
+    endfunction
+    function void sample(logic [1:0] hresp, bit hsplit_pulse, bit hselx);
+        cg.sample(hresp, hsplit_pulse, hselx);
+    endfunction
+    function real get_cov();
+        return cg.get_inst_coverage();
+    endfunction
+    function void report_detail(string tag);
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_hresp_slave = %6.2f %%", tag, cg.cp_hresp_slave.get_inst_coverage()), UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_hsplitx     = %6.2f %%", tag, cg.cp_hsplitx.get_inst_coverage()),     UVM_LOW)
+    endfunction
+endclass : cov_slave_resp
+
+// --- Wrapper 4: Force (chen SPLIT/RETRY vao giua giao dich) -------------------
+class cov_force;
+    // in_data_phase = FSM dang o WBURST hoac RBURST (dung guard: chi do luc
+    //                 "dang truyen du lieu", dung ngu nghia "inject giua chung")
+    // abort_active  = resp_abort=1 (dang cat ngang burst) -> guard cho cp_abort_beat
+    covergroup cg with function sample(logic fsplit, logic fretry,
+                                        logic hwrite, logic [2:0] hburst,
+                                        bit in_data_phase, bit abort_active,
+                                        bit is_first, bit is_mid, bit is_last);
+        option.per_instance = 1;
+        cp_force_split: coverpoint fsplit iff (in_data_phase) { bins inactive = {0}; bins active = {1}; }
+        cp_force_retry: coverpoint fretry iff (in_data_phase) { bins inactive = {0}; bins active = {1}; }
+        cp_force_type: coverpoint {fsplit, fretry} iff (in_data_phase) {
+            bins split_only = {2'b10};
+            bins retry_only = {2'b01};
+            illegal_bins both = {2'b11}; // khong duoc bat ca 2 cung luc
+        }
+        cp_hwrite_f: coverpoint hwrite iff (in_data_phase) { bins read = {0}; bins write = {1}; }
+        cp_hburst_f: coverpoint hburst {
+            bins single = {B_SINGLE}; bins incr   = {B_INCR};
+            bins wrap4  = {B_WRAP4};  bins incr4  = {B_INCR4};
+            bins wrap8  = {B_WRAP8};  bins incr8  = {B_INCR8};
+            bins wrap16 = {B_WRAP16}; bins incr16 = {B_INCR16};
+        }
+        cross_force_x_rw:    cross cp_force_type, cp_hwrite_f;
+        cross_force_x_burst: cross cp_force_type, cp_hburst_f;
+        cp_abort_beat: coverpoint {is_first, is_mid, is_last} iff (abort_active) {
+            bins first_beat = {3'b100};
+            bins mid_beat   = {3'b010};
+            bins last_beat  = {3'b001};
+        }
+    endgroup
+    function new(string inst_name);
+        cg = new();
+        cg.set_inst_name(inst_name);
+    endfunction
+    function void sample(logic fsplit, logic fretry, logic hwrite, logic [2:0] hburst,
+                         bit in_data_phase, bit abort_active,
+                         bit is_first, bit is_mid, bit is_last);
+        cg.sample(fsplit, fretry, hwrite, hburst, in_data_phase, abort_active,
+                  is_first, is_mid, is_last);
+    endfunction
+    function real get_cov();
+        return cg.get_inst_coverage();
+    endfunction
+    function void report_detail(string tag);
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_force_split     = %6.2f %%", tag, cg.cp_force_split.get_inst_coverage()),     UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_force_retry     = %6.2f %%", tag, cg.cp_force_retry.get_inst_coverage()),     UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_force_type      = %6.2f %%", tag, cg.cp_force_type.get_inst_coverage()),      UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_hwrite_f        = %6.2f %%", tag, cg.cp_hwrite_f.get_inst_coverage()),        UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_hburst_f        = %6.2f %%", tag, cg.cp_hburst_f.get_inst_coverage()),        UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cross_force_x_rw   = %6.2f %%", tag, cg.cross_force_x_rw.get_inst_coverage()),   UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cross_force_x_burst= %6.2f %%", tag, cg.cross_force_x_burst.get_inst_coverage()),UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  [%s] cp_abort_beat      = %6.2f %%", tag, cg.cp_abort_beat.get_inst_coverage()),      UVM_LOW)
+    endfunction
+endclass : cov_force
+
+
+//=============================================================================
+// PHAN B - COLLECTOR CHINH
+//=============================================================================
+class ahb_coverage_collector extends uvm_component;
+    `uvm_component_utils(ahb_coverage_collector)
+
+    //-------------------------------------------------------------------
+    // B.1) VIRTUAL INTERFACE (chi doc), lay qua uvm_config_db.
+    //-------------------------------------------------------------------
+    virtual ahb_master_if      m1_vif;
+    virtual ahb_master_if      m2_vif;
+    virtual ahb_sys_if         sys_vif;
+    virtual ahb_slave_bd_if    s_vif[1:3];   // [1]=S1 [2]=S2 [3]=S3
+
+    //-------------------------------------------------------------------
+    // B.2) TLM ANALYSIS IMP - dung lai macro _m1/_m2 co san (agents file).
+    //-------------------------------------------------------------------
+    uvm_analysis_imp_m1#(ahb_seq_item, ahb_coverage_collector) imp_m1;
+    uvm_analysis_imp_m2#(ahb_seq_item, ahb_coverage_collector) imp_m2;
+
+    //-------------------------------------------------------------------
+    // B.3) MO HINH NOI BO (mirror model) - vi la thanh ghi noi bo cua
+    //      arbiter/mux (khong co bind rieng). Logic cap nhat -> Ngay 2.
+    //-------------------------------------------------------------------
+    bit       mask_m1, mask_m2;      // mirror split_mask cua arbiter
+    bit [1:0] mux_sel_dp_model;      // mirror read_data_mux  (region tre 1 chu ky)
+    bit       master_sel_dp_model;   // mirror write_data_mux (HMASTER tre 1 chu ky)
+
+    //-------------------------------------------------------------------
+    // B.4) CAC COVERGROUP DON INSTANCE (arbiter/decoder/mux/txn).
+    //      Deu dang "with function sample(...)" -> khong nhung vif truc
+    //      tiep -> an toan khi construct.
+    //-------------------------------------------------------------------
+
+    // ---- Arbiter FSM: grant hien hanh / chuyen quyen / ai dang xin bus ----
+    covergroup cg_arb_fsm with function sample(logic [1:0] grant, logic [1:0] req);
+        option.per_instance = 1;
+        // grant = {HGRANT_M1, HGRANT_M2}: 10=cap M1, 01=cap M2, 00=khong cap
+        cp_grant: coverpoint grant {
+            bins none          = {2'b00};
+            bins m1            = {2'b10};
+            bins m2            = {2'b01};
+            illegal_bins both  = {2'b11}; // cap ca 2 cung luc = vi pham (cap voi assertion A1)
+        }
+        cp_grant_trans: coverpoint grant {
+            bins idle_to_m1 = (2'b00 => 2'b10);
+            bins idle_to_m2 = (2'b00 => 2'b01);
+            bins m1_to_m2   = (2'b10 => 2'b01);
+            bins m2_to_m1   = (2'b01 => 2'b10);
+            bins m1_to_idle = (2'b10 => 2'b00);
+            bins m2_to_idle = (2'b01 => 2'b00);
+        }
+        // req = {HBUSREQ_M1, HBUSREQ_M2}: 11 = ca 2 cung xin (contention)
+        cp_req: coverpoint req {
+            bins none = {2'b00};
+            bins m1   = {2'b10};
+            bins m2   = {2'b01};
+            bins both = {2'b11};
+        }
+        cross_req_x_state: cross cp_req, cp_grant;
+    endgroup
+
+    // ---- Arbiter split-mask + xac nhan SPLIT ----
+    covergroup cg_arb_split with function sample(bit m1_masked, bit m2_masked, bit split_hit);
+        option.per_instance = 1;
+        cp_split_mask_m1: coverpoint m1_masked { bins clear = {0}; bins masked = {1}; }
+        cp_split_mask_m2: coverpoint m2_masked { bins clear = {0}; bins masked = {1}; }
+      cp_both_masked:   coverpoint {m1_masked, m2_masked} {option.weight=0; bins both = {2'b11}; }
+        cp_split_confirmed: coverpoint split_hit { bins hit = {1}; }
+    endgroup
+
+    // ---- Arbiter con lai (chi con HMASTLOCK sau khi loc) ----
+    covergroup cg_arb_misc with function sample(logic hmastlock);
+        option.per_instance = 1;
+        cp_hmastlock: coverpoint hmastlock { bins off = {0}; bins on = {1}; }
+    endgroup
+
+    // ---- Decoder: dinh tuyen 4 vung + kiem one-hot ----
+    covergroup cg_decoder with function sample(logic [1:0] region, logic [3:0] hsel_bits,
+                                                logic hwrite, bit valid_trans);
+        option.per_instance = 1;
+        cp_region: coverpoint region iff (valid_trans) {
+            bins s1 = {2'b00}; bins s2 = {2'b01}; bins s3 = {2'b10}; bins dflt = {2'b11};
+        }
+        // hsel_bits = {HSEL_S1, HSEL_S2, HSEL_S3, HSEL_DEFAULT}
+        cp_hsel_onehot: coverpoint hsel_bits {
+            bins s1   = {4'b1000};
+            bins s2   = {4'b0100};
+            bins s3   = {4'b0010};
+            bins def  = {4'b0001};
+            bins none = {4'b0000}; // khong chon slave nao (luc idle) - hop le
+            // Fix illegal_bins=default (cu phap sai) -> dung bo loc 'with':
+            // bat moi gia tri co >1 bit len = chon nham >=2 slave = illegal.
+            illegal_bins multi_sel = {[4'b0000:4'b1111]} with ($countones(item) > 1);
+        }
+        cp_hwrite_d: coverpoint hwrite iff (valid_trans) { bins read = {0}; bins write = {1}; }
+        cross_region_x_write: cross cp_region, cp_hwrite_d;
+    endgroup
+
+    // ---- Mux pipeline: dinh tuyen data phase + giu wait-state ----
+    covergroup cg_mux_pipe with function sample(logic [1:0] mux_sel_dp, logic master_sel_dp,
+                                                 logic hready_global);
+        option.per_instance = 1;
+        cp_mux_sel_dp: coverpoint mux_sel_dp {
+            bins s1 = {2'b00}; bins s2 = {2'b01}; bins s3 = {2'b10}; bins dflt = {2'b11};
+        }
+        cp_master_sel_dp: coverpoint master_sel_dp {
+            bins m1           = {0};
+            bins m2           = {1};
+            bins toggle_m1_m2 = (0 => 1);
+            bins toggle_m2_m1 = (1 => 0);
+        }
+        cp_hready: coverpoint hready_global {
+            bins high     = {1};
+            bins low      = {0};
+            bins wait_seq = (1 => 0 => 1); // chen wait-state roi khoi phuc
+        }
+    endgroup
+
+    // ---- Transaction-level (nhan qua TLM tu master monitor) ----
+    // master_id: 0=M1, 1=M2 ; worst_resp: resp "te nhat" cua ca giao dich
+    covergroup cg_txn with function sample(bit master_id, logic [1:0] region,
+                                            logic [1:0] worst_resp, logic [2:0] hburst,
+                                            bit is_nonseq);
+        option.per_instance = 1;
+        cp_master: coverpoint master_id { bins m1 = {0}; bins m2 = {1}; }
+        cp_region_txn: coverpoint region iff (is_nonseq) {
+            bins s1 = {2'b00}; bins s2 = {2'b01}; bins s3 = {2'b10}; bins dflt = {2'b11};
+        }
+        cp_resp_txn: coverpoint worst_resp {
+            bins okay  = {R_OKAY};  bins error = {R_ERROR};
+            bins split = {R_SPLIT}; bins retry = {R_RETRY};
+        }
+        cp_burst_txn: coverpoint hburst iff (is_nonseq) {
+            bins single = {B_SINGLE}; bins incr   = {B_INCR};
+            bins wrap4  = {B_WRAP4};  bins incr4  = {B_INCR4};
+            bins wrap8  = {B_WRAP8};  bins incr8  = {B_INCR8};
+            bins wrap16 = {B_WRAP16}; bins incr16 = {B_INCR16};
+        }
+        cp_handover: coverpoint master_id { // thay cho cp_last_master da bo
+            bins m1_to_m2 = (0 => 1);
+            bins m2_to_m1 = (1 => 0);
+        }
+        cross_master_x_region: cross cp_master, cp_region_txn;
+        cross_master_x_resp:   cross cp_master, cp_resp_txn;
+        cross_master_x_burst:  cross cp_master, cp_burst_txn;
+    endgroup
+
+    //-------------------------------------------------------------------
+    // B.5) Handle cho 4 nhom 3-instance (dung wrapper o Phan A).
+    //-------------------------------------------------------------------
+    cov_slave_fsm  fsm_cov [1:3];
+    cov_slave_if   if_cov  [1:3];
+    cov_slave_resp resp_cov[1:3];
+    cov_force      force_cov[1:3];
+
+    //-------------------------------------------------------------------
+    // B.6) HAM KHOI TAO - construct 6 covergroup don instance O DAY.
+    //      Questa bat buoc: covergroup khai bao ben trong 1 class chi duoc
+    //      tao (= new()) trong ham new() cua chinh class do, khong duoc
+    //      tao o build_phase hay bat ky cho nao khac (loi vlog-13141).
+    //      An toan vi tat ca 6 covergroup deu dung "with function sample(...)"
+    //      -> khong doc vif truc tiep -> khong can vif co san luc tao.
+    //-------------------------------------------------------------------
+    function new(string name, uvm_component parent);
+        super.new(name, parent);
+        // 6 covergroup don instance - BAT BUOC tao o day (Questa rule)
+        cg_arb_fsm   = new();
+        cg_arb_split = new();
+        cg_arb_misc  = new();
+        cg_decoder   = new();
+        cg_mux_pipe  = new();
+        cg_txn       = new();
+    endfunction
+
+    //-------------------------------------------------------------------
+    // B.7) BUILD_PHASE:
+    //      (1) lay 6 vif,  (2) construct 2 imp,  (3) construct 4 wrapper array.
+    //      Luu y: 6 covergroup don instance (cg_arb_fsm, cg_arb_split, ...)
+    //      da duoc tao trong new() o tren (yeu cau cua Questa).
+    //-------------------------------------------------------------------
+    function void build_phase(uvm_phase phase);
+        super.build_phase(phase);
+
+        // (1) Lay vif - thieu bat ky cai nao -> bao loi ngay
+        if (!uvm_config_db#(virtual ahb_master_if)::get(this, "", "m1_vif", m1_vif))
+            `uvm_fatal("CFGDB", $sformatf("m1_vif MISSING for %s", get_full_name()))
+        if (!uvm_config_db#(virtual ahb_master_if)::get(this, "", "m2_vif", m2_vif))
+            `uvm_fatal("CFGDB", $sformatf("m2_vif MISSING for %s", get_full_name()))
+        if (!uvm_config_db#(virtual ahb_sys_if)::get(this, "", "sys_vif", sys_vif))
+            `uvm_fatal("CFGDB", $sformatf("sys_vif MISSING for %s", get_full_name()))
+        if (!uvm_config_db#(virtual ahb_slave_bd_if)::get(this, "", "bd_vif_s1", s_vif[1]))
+            `uvm_fatal("CFGDB", $sformatf("bd_vif_s1 MISSING for %s", get_full_name()))
+        if (!uvm_config_db#(virtual ahb_slave_bd_if)::get(this, "", "bd_vif_s2", s_vif[2]))
+            `uvm_fatal("CFGDB", $sformatf("bd_vif_s2 MISSING for %s", get_full_name()))
+        if (!uvm_config_db#(virtual ahb_slave_bd_if)::get(this, "", "bd_vif_s3", s_vif[3]))
+            `uvm_fatal("CFGDB", $sformatf("bd_vif_s3 MISSING for %s", get_full_name()))
+
+        // (2) Construct 2 analysis imp (BAT BUOC - neu quen se null luc connect)
+        imp_m1 = new("imp_m1", this);
+        imp_m2 = new("imp_m2", this);
+
+        // (3) Construct 4 nhom wrapper 3-instance (dat ten instance rieng)
+        //     Day la class thuong (khong phai covergroup embedded) -> tao o day OK.
+        //     LUU Y QUAN TRONG: ca 4 class wrapper deu dat ten covergroup ben
+        //     trong la "cg" giong nhau (xem Phan A). Neu dung chung 1 chuoi ten
+        //     instance ("S1"/"S2"/"S3") cho ca 4 nhom, Xcelium se KHONG phan
+        //     biet duoc luc ghi database coverage cuoi mo phong -> loi that
+        //     "*E,CGNCTN: ... same instance name ... was earlier saved" (da
+        //     gap thuc te tren EDA Playground/Xcelium). Vi vay PHAI ghep them
+        //     tien to rieng cho tung nhom truoc so, de moi ten instance la
+        //     DUY NHAT trong toan bo thiet ke.
+        for (int i = 1; i <= 3; i++) begin
+            fsm_cov  [i] = new($sformatf("FSM_S%0d",   i));
+            if_cov   [i] = new($sformatf("IF_S%0d",    i));
+            resp_cov [i] = new($sformatf("RESP_S%0d",  i));
+            force_cov[i] = new($sformatf("FORCE_S%0d", i));
+        end
+
+        `uvm_info("COV_BUILD", "ahb_coverage_collector: 6 vif OK, imp OK, covergroup OK", UVM_LOW)
+    endfunction
+
+    //-------------------------------------------------------------------
+    // B.8) TLM CALLBACK - nhan item TU master monitor ngay khi giao dich
+    //      hoan tat (khong theo chu ky clock). Lay tu item: master nao,
+    //      vung dia chi (addr[31:30]), loai burst, va response "te nhat".
+    //-------------------------------------------------------------------
+    function void write_m1(ahb_seq_item item);
+        do_txn(1'b0, item); // 0 = M1
+    endfunction
+
+    function void write_m2(ahb_seq_item item);
+        do_txn(1'b1, item); // 1 = M2
+    endfunction
+
+    // Ham dung chung cho ca 2 master (tranh chep code)
+    function void do_txn(bit mid, ahb_seq_item item);
+        logic [1:0] region;
+        logic [1:0] worst;
+        bit         is_nonseq;
+        region    = item.addr[31:30];          // 00=S1 01=S2 10=S3 11=Default
+        worst     = worst_resp_of(item);        // resp "te nhat" cua ca giao dich
+        is_nonseq = (item.trans == T_NONSEQ);   // chi dem region/burst khi la NONSEQ (dau giao dich)
+        cg_txn.sample(mid, region, worst, item.burst, is_nonseq);
+    endfunction
+
+    // Helper: tim response "te nhat" cua 1 giao dich.
+    // Y nghia: 1 giao dich burst co nhieu "nhip" (beat), moi nhip 1 response.
+    // Ta muon danh dau neu BAT KY nhip nao khong phai OKAY (co ERROR/RETRY/SPLIT).
+    // Neu queue beats_resp rong (giao dich don), dung truong 'resp' cuoi cung.
+    function automatic logic [1:0] worst_resp_of(ahb_seq_item item);
+        logic [1:0] w;
+        w = item.resp; // mac dinh: response cuoi cung
+        if (item.beats_resp.size() > 0) begin
+            w = R_OKAY;
+            foreach (item.beats_resp[i])
+                if (item.beats_resp[i] != R_OKAY)
+                    w = item.beats_resp[i]; // giu lai nhip khong-OKAY (neu co nhieu, lay nhip cuoi)
+        end
+        return w;
+    endfunction
+
+    // Helper: so nhip (beat) cua 1 kieu burst. Dung de suy ra vi tri nhip
+    // dau/giua/cuoi khi kiem tra abort. INCR (do dai khong xac dinh) -> coi
+    // nhu 1 (truong hop bien, se ghi chu trong file giai thich).
+    function automatic int beats_of(logic [2:0] b);
+        case (b)
+            B_SINGLE, B_INCR    : return 1;
+            B_WRAP4,  B_INCR4   : return 4;
+            B_WRAP8,  B_INCR8   : return 8;
+            B_WRAP16, B_INCR16  : return 16;
+            default             : return 1;
+        endcase
+    endfunction
+
+    //-------------------------------------------------------------------
+    // B.9) VONG SAMPLE THEO CHU KY - Ngay 1: khung rong, dung pattern
+    //      chong loi #1step. Ngay 2 dien logic doc tin hieu + .sample().
+    //-------------------------------------------------------------------
+
+    // Nhom arbiter + decoder + mux (doc tu sys_vif + 2 master vif + s_vif)
+    task automatic sample_bus_group();
+        // Bien tam khai bao NGOAI forever (khong khai bao lai moi vong)
+        logic [1:0] grant, req;
+        logic       hmastlock, hready, hwrite;
+        logic [1:0] region;
+        logic [3:0] hsel_bits;
+        bit         valid_trans;
+        bit         cur_is_m2;
+        bit         split_hit;
+        int         i;
+
+        forever begin
+            @(posedge sys_vif.HCLK);
+            #1; // BAT BUOC: doi tin hieu on dinh moi doc (chong loi #1step)
+
+            // Bo qua trong luc reset (tin hieu chua hop le)
+            if (sys_vif.HRESETn !== 1'b1) begin
+                mask_m1 = 1'b0;  mask_m2 = 1'b0;
+                mux_sel_dp_model = 2'b00;  master_sel_dp_model = 1'b0;
+                continue;
+            end
+
+            // --- Doc tin hieu tho ---
+            grant       = {m1_vif.HGRANT, m2_vif.HGRANT};      // {M1,M2}: 10=M1,01=M2,00=none
+            req         = {m1_vif.HBUSREQ, m2_vif.HBUSREQ};
+            hmastlock   = sys_vif.HMASTLOCK_o;
+            hready      = sys_vif.HREADY_GLOBAL_o;
+            hwrite      = sys_vif.HWRITE_S_o;
+            region      = sys_vif.HADDR_S_o[31:30];
+            hsel_bits   = {sys_vif.HSEL_S1_o, sys_vif.HSEL_S2_o,
+                           sys_vif.HSEL_S3_o, sys_vif.HSEL_DEFAULT_o};
+            valid_trans = (sys_vif.HTRANS_S_o == T_NONSEQ) || (sys_vif.HTRANS_S_o == T_SEQ);
+            cur_is_m2   = (sys_vif.HMASTER_o == 4'd1);
+
+            // --- Cap nhat "ban sao" split-mask cua arbiter (mirror model) ---
+            // Quan sat gian tiep: khi 1 slave duoc chon tra loi SPLIT -> master
+            // dang truy cap slave do bi "khoa" (masked). Khi slave phat HSPLITx
+            // cho master m -> mo khoa master do. Day la mo hinh xap xi tu tin
+            // hieu quan sat duoc, KHONG phai ban sao chinh xac logic arbiter.
+            split_hit = 1'b0;
+            for (i = 1; i <= 3; i++) begin
+                if (s_vif[i].HRESP == R_SPLIT) begin
+                    split_hit = 1'b1;
+                    // slave i co dang duoc chon khong?
+                    if ( (i==1 && sys_vif.HSEL_S1_o) ||
+                         (i==2 && sys_vif.HSEL_S2_o) ||
+                         (i==3 && sys_vif.HSEL_S3_o) ) begin
+                        if (cur_is_m2) mask_m2 = 1'b1;
+                        else           mask_m1 = 1'b1;
+                    end
+                end
+                // Mo khoa: HSPLITx bit 0 -> M1, bit 1 -> M2
+                if (s_vif[i].HSPLITx[0]) mask_m1 = 1'b0;
+                if (s_vif[i].HSPLITx[1]) mask_m2 = 1'b0;
+            end
+
+            // --- Sample cac covergroup nhom bus ---
+            cg_arb_fsm.sample(grant, req);
+            cg_arb_split.sample(mask_m1, mask_m2, split_hit);
+            cg_arb_misc.sample(hmastlock);
+            cg_decoder.sample(region, hsel_bits, hwrite, valid_trans);
+            cg_mux_pipe.sample(mux_sel_dp_model, master_sel_dp_model, hready);
+
+            // --- Cap nhat mo hinh mux pipeline cho chu ky SAU ---
+            // Mux du lieu (data phase) tre 1 chu ky so voi dia chi (address
+            // phase). Khi bus san sang (hready) thi chot gia tri hien tai vao
+            // thanh ghi mo phong -> chu ky sau .sample() se thay gia tri "tre".
+            if (hready) begin
+                mux_sel_dp_model    = region;
+                master_sel_dp_model = cur_is_m2;
+            end
+        end
+    endtask
+
+    // Nhom slave (goi 3 lan, moi lan 1 idx -> tranh chep code 3 lan)
+    task automatic sample_slave_group(int unsigned idx);
+        // Bien tam
+        logic [2:0] ps;
+        logic [1:0] htrans, hresp;
+        logic [2:0] hburst;
+        logic       hwrite;
+        logic [7:0] addr;
+        bit         hsel_this, hsplit_pulse;
+        logic       fsplit, fretry;
+        bit         in_data_phase, abort_active;
+        bit         is_first, is_mid, is_last;
+        int         total;
+        logic [5:0] bcnt;
+
+        forever begin
+            @(posedge s_vif[idx].HCLK);
+            #1; // BAT BUOC cho tin hieu qua bind (Xcelium #1step tra gia tri cu)
+
+            if (s_vif[idx].HRESETn !== 1'b1) continue; // bo qua luc reset
+
+            // --- Doc tin hieu tho tu slave idx ---
+            // GIA DINH (A) - DA SUA (phat hien qua vsim-8274 Fatal khi chay
+            // thuc te tren Questa): ban dau file nay doc TRUC TIEP
+            // local_write, vi file du an ahb_slave_bd_if.txt cho thay port
+            // do da ton tai. Nhung khi chay tren may that, Questa bao
+            // "Virtual interface elem. 'local_write' not found in
+            // 'ahb_slave_bd_if'" luc nap thiet ke -> chung to ban
+            // ahb_interfaces.sv DANG THUC SU duoc compile tren Questa VM
+            // (co the chua dong bo voi file du an) KHONG expose local_write.
+            // Bang chung luc chay (runtime) dang tin hon file tham khao, nen
+            // quay lai dung phuong an GOC cua tai lieu 30: SUY LUAN huong
+            // doc/ghi tu ps_slave (khong doc local_write nua, khong can bat
+            // ky thay doi RTL/interface nao).
+            // Co so suy luan (doc RTL AHB_Slave that): MOI burst - ke ca
+            // SINGLE - deu di qua dung ST_WBURST khi ghi hoac ST_RBURST khi
+            // doc, khong co truong hop mo ho. Vi vay hwrite chi xac dinh
+            // duoc ro rang KHI dang o 1 trong 2 trang thai nay (bien
+            // in_data_phase ben duoi) - day cung la ly do guard cua nhom
+            // cg_slave_if doi tu ST_ACTIVE sang in_data_phase (xem wrapper
+            // cov_slave_if o Phan A).
+            ps      = s_vif[idx].ps_slave;
+            hburst  = s_vif[idx].local_burst;
+            addr    = s_vif[idx].local_addr;
+            hresp   = s_vif[idx].HRESP;
+            bcnt    = s_vif[idx].beat_cnt;
+            abort_active = s_vif[idx].resp_abort;
+            htrans  = sys_vif.HTRANS_S_o;       // HTRANS dung chung tren bus (guard bang hsel_this)
+            hsplit_pulse = (s_vif[idx].HSPLITx != 16'h0);
+
+            // --- Cac co (flag) dan xuat ---
+            in_data_phase = (ps == SLV_WBURST) || (ps == SLV_RBURST);
+            hwrite        = (ps == SLV_WBURST); // suy luan: WBURST=ghi, RBURST=doc (xem GIA DINH A o tren)
+
+            // --- Chon tin hieu rieng theo tung slave (force + HSEL) ---
+            case (idx)
+                1: begin fsplit=sys_vif.force_split_s1; fretry=sys_vif.force_retry_s1; hsel_this=sys_vif.HSEL_S1_o; end
+                2: begin fsplit=sys_vif.force_split_s2; fretry=sys_vif.force_retry_s2; hsel_this=sys_vif.HSEL_S2_o; end
+                3: begin fsplit=sys_vif.force_split_s3; fretry=sys_vif.force_retry_s3; hsel_this=sys_vif.HSEL_S3_o; end
+                default: begin fsplit=1'b0; fretry=1'b0; hsel_this=1'b0; end
+            endcase
+
+            // Vi tri nhip khi dang abort: beat_cnt dem NGUOC (nhip cuoi khi =1).
+            total    = beats_of(hburst);
+            is_last  = (bcnt == 6'd1);
+            is_first = (bcnt == total[5:0]);
+            is_mid   = (!is_first && !is_last && bcnt != 6'd0);
+
+            // --- Sample 4 covergroup cho slave idx ---
+            fsm_cov [idx].sample(ps);
+            if_cov  [idx].sample(htrans, hburst, hwrite, addr, in_data_phase, hsel_this);
+            resp_cov[idx].sample(hresp, hsplit_pulse, hsel_this);
+            force_cov[idx].sample(fsplit, fretry, hwrite, hburst,
+                                  in_data_phase, abort_active, is_first, is_mid, is_last);
+        end
+    endtask
+
+    //-------------------------------------------------------------------
+    // B.10) RUN_PHASE - fork moi vong sample chay song song (join_none).
+    //       KHONG raise/drop objection (collector chi quan sat).
+    //-------------------------------------------------------------------
+    task run_phase(uvm_phase phase);
+        fork
+            sample_bus_group();
+            sample_slave_group(1);
+            sample_slave_group(2);
+            sample_slave_group(3);
+        join_none
+    endtask
+
+    //-------------------------------------------------------------------
+    // B.11) REPORT_PHASE - in % coverage cua tung covergroup + tung slave.
+    //       Chay 1 lan cuoi mo phong. Day chi la bao cao nhanh tren console;
+    //       so lieu chinh thuc (merge nhieu test) van lay tu file UCDB.
+    //-------------------------------------------------------------------
+    function void report_phase(uvm_phase phase);
+        super.report_phase(phase);
+        `uvm_info("COVERAGE", "============================================================", UVM_LOW)
+        `uvm_info("COVERAGE", "====  FUNCTIONAL COVERAGE - TONG QUAN theo COVERGROUP  ====", UVM_LOW)
+        `uvm_info("COVERAGE", "============================================================", UVM_LOW)
+
+        // --- Muc 1: TONG % moi covergroup (nhu cu, de nhin nhanh) ---
+        `uvm_info("COVERAGE", $sformatf("cg_arb_fsm    = %6.2f %%", cg_arb_fsm.get_inst_coverage()),   UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("cg_arb_split  = %6.2f %%", cg_arb_split.get_inst_coverage()), UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("cg_arb_misc   = %6.2f %%", cg_arb_misc.get_inst_coverage()),  UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("cg_decoder    = %6.2f %%", cg_decoder.get_inst_coverage()),   UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("cg_mux_pipe   = %6.2f %%", cg_mux_pipe.get_inst_coverage()),  UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("cg_txn        = %6.2f %%", cg_txn.get_inst_coverage()),       UVM_LOW)
+        for (int i = 1; i <= 3; i++) begin
+            `uvm_info("COVERAGE", $sformatf("slave_fsm [S%0d] = %6.2f %%", i, fsm_cov [i].get_cov()), UVM_LOW)
+            `uvm_info("COVERAGE", $sformatf("slave_if  [S%0d] = %6.2f %%", i, if_cov  [i].get_cov()), UVM_LOW)
+            `uvm_info("COVERAGE", $sformatf("slave_resp[S%0d] = %6.2f %%", i, resp_cov[i].get_cov()), UVM_LOW)
+            `uvm_info("COVERAGE", $sformatf("force     [S%0d] = %6.2f %%", i, force_cov[i].get_cov()), UVM_LOW)
+        end
+
+        // --- Muc 2: CHI TIET tung COVERPOINT (de biet CHINH XAC diem nao con
+        //     trong -> phuc vu gap analysis Ngay 3). Coverpoint nao < 100%
+        //     nghia la con bin chua duoc cham. ---
+        `uvm_info("COVERAGE", "------------------------------------------------------------", UVM_LOW)
+        `uvm_info("COVERAGE", "====  CHI TIET theo COVERPOINT (tim diem con trong)   ====", UVM_LOW)
+        `uvm_info("COVERAGE", "------------------------------------------------------------", UVM_LOW)
+
+        `uvm_info("COVERAGE", "-- cg_arb_fsm --", UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_grant           = %6.2f %%", cg_arb_fsm.cp_grant.get_inst_coverage()),          UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_grant_trans     = %6.2f %%", cg_arb_fsm.cp_grant_trans.get_inst_coverage()),    UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_req             = %6.2f %%", cg_arb_fsm.cp_req.get_inst_coverage()),            UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cross_req_x_state  = %6.2f %%", cg_arb_fsm.cross_req_x_state.get_inst_coverage()), UVM_LOW)
+
+        `uvm_info("COVERAGE", "-- cg_arb_split --", UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_split_mask_m1   = %6.2f %%", cg_arb_split.cp_split_mask_m1.get_inst_coverage()),   UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_split_mask_m2   = %6.2f %%", cg_arb_split.cp_split_mask_m2.get_inst_coverage()),   UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_both_masked     = %6.2f %%", cg_arb_split.cp_both_masked.get_inst_coverage()),     UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_split_confirmed = %6.2f %%", cg_arb_split.cp_split_confirmed.get_inst_coverage()), UVM_LOW)
+
+        `uvm_info("COVERAGE", "-- cg_arb_misc --", UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_hmastlock       = %6.2f %%", cg_arb_misc.cp_hmastlock.get_inst_coverage()), UVM_LOW)
+
+        `uvm_info("COVERAGE", "-- cg_decoder --", UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_region          = %6.2f %%", cg_decoder.cp_region.get_inst_coverage()),           UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_hsel_onehot     = %6.2f %%", cg_decoder.cp_hsel_onehot.get_inst_coverage()),      UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_hwrite_d        = %6.2f %%", cg_decoder.cp_hwrite_d.get_inst_coverage()),         UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cross_region_x_write=%6.2f %%", cg_decoder.cross_region_x_write.get_inst_coverage()),UVM_LOW)
+
+        `uvm_info("COVERAGE", "-- cg_mux_pipe --", UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_mux_sel_dp      = %6.2f %%", cg_mux_pipe.cp_mux_sel_dp.get_inst_coverage()),    UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_master_sel_dp   = %6.2f %%", cg_mux_pipe.cp_master_sel_dp.get_inst_coverage()), UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_hready          = %6.2f %%", cg_mux_pipe.cp_hready.get_inst_coverage()),        UVM_LOW)
+
+        `uvm_info("COVERAGE", "-- cg_txn --", UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_master              = %6.2f %%", cg_txn.cp_master.get_inst_coverage()),               UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_region_txn          = %6.2f %%", cg_txn.cp_region_txn.get_inst_coverage()),           UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_resp_txn            = %6.2f %%", cg_txn.cp_resp_txn.get_inst_coverage()),             UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_burst_txn           = %6.2f %%", cg_txn.cp_burst_txn.get_inst_coverage()),            UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cp_handover            = %6.2f %%", cg_txn.cp_handover.get_inst_coverage()),             UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cross_master_x_region  = %6.2f %%", cg_txn.cross_master_x_region.get_inst_coverage()),   UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cross_master_x_resp    = %6.2f %%", cg_txn.cross_master_x_resp.get_inst_coverage()),     UVM_LOW)
+        `uvm_info("COVERAGE", $sformatf("  cross_master_x_burst   = %6.2f %%", cg_txn.cross_master_x_burst.get_inst_coverage()),    UVM_LOW)
+
+        // Nhom 3-instance: goi report_detail cua tung wrapper cho tung slave
+        for (int i = 1; i <= 3; i++) begin
+            `uvm_info("COVERAGE", $sformatf("-- slave FSM  [S%0d] --", i), UVM_LOW)
+            fsm_cov [i].report_detail($sformatf("S%0d", i));
+            `uvm_info("COVERAGE", $sformatf("-- slave IF   [S%0d] --", i), UVM_LOW)
+            if_cov  [i].report_detail($sformatf("S%0d", i));
+            `uvm_info("COVERAGE", $sformatf("-- slave RESP [S%0d] --", i), UVM_LOW)
+            resp_cov[i].report_detail($sformatf("S%0d", i));
+            `uvm_info("COVERAGE", $sformatf("-- slave FORCE[S%0d] --", i), UVM_LOW)
+            force_cov[i].report_detail($sformatf("S%0d", i));
+        end
+        `uvm_info("COVERAGE", "============================================================", UVM_LOW)
+    endfunction
+
+endclass : ahb_coverage_collector
