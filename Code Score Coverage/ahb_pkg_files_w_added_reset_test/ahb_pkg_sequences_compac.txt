@@ -1,0 +1,2014 @@
+class ahb_base_seq extends uvm_sequence#(ahb_seq_item);
+`uvm_object_utils(ahb_base_seq)
+function new(string name = "ahb_base_seq");
+super.new(name);
+endfunction
+endclass : ahb_base_seq
+class ahb_write_single_seq extends ahb_base_seq;
+rand logic [31:0] addr;
+rand logic [31:0] wdata;
+rand bit          lock;
+int unsigned      max_attempts = 1;
+logic [1:0] resp;
+constraint c_defaults {
+soft lock      == 1'b0;
+addr[1:0]      == 2'b00;
+}
+`uvm_object_utils(ahb_write_single_seq)
+function new(string name = "ahb_write_single_seq");
+super.new(name);
+endfunction
+task body();
+ahb_seq_item it;
+it = ahb_seq_item::type_id::create("w_it");
+start_item(it);
+it.dir          = AHB_WRITE;
+it.addr         = addr;
+it.wdata        = wdata;
+it.trans        = T_NONSEQ;
+it.burst        = B_SINGLE;
+it.size         = SZ_WORD;
+it.lock         = lock;
+it.busreq       = 1'b1;
+it.num_beats    = 1;
+it.max_attempts = max_attempts;
+it.exp_resp     = R_OKAY;
+finish_item(it);
+resp = it.resp;
+endtask
+endclass : ahb_write_single_seq
+class ahb_read_single_seq extends ahb_base_seq;
+rand logic [31:0] addr;
+rand bit          lock;
+int unsigned      max_attempts = 1;
+logic [31:0] rdata;
+logic [1:0]  resp;
+constraint c_defaults {
+soft lock     == 1'b0;
+addr[1:0]     == 2'b00;
+}
+`uvm_object_utils(ahb_read_single_seq)
+function new(string name = "ahb_read_single_seq");
+super.new(name);
+endfunction
+task body();
+ahb_seq_item it;
+it = ahb_seq_item::type_id::create("r_it");
+start_item(it);
+it.dir          = AHB_READ;
+it.addr         = addr;
+it.trans        = T_NONSEQ;
+it.burst        = B_SINGLE;
+it.size         = SZ_WORD;
+it.lock         = lock;
+it.busreq       = 1'b1;
+it.num_beats    = 1;
+it.max_attempts = max_attempts;
+it.exp_resp     = R_OKAY;
+finish_item(it);
+rdata = it.rdata;
+resp  = it.resp;
+endtask
+endclass : ahb_read_single_seq
+typedef enum {
+PAT_DEAD,
+PAT_INDEX,
+PAT_RAND
+} burst_pat_e;
+class ahb_write_burst_seq extends ahb_base_seq;
+rand logic [31:0]   base_addr;
+rand logic [2:0]    burst_type;
+burst_pat_e         pattern = PAT_DEAD;
+logic [31:0]        user_data[$];
+bit                 abort_aware  = 1'b0;
+int unsigned        max_attempts = 1;
+constraint c_align { base_addr[1:0] == 2'b00; }
+constraint c_dflt  { soft burst_type == B_INCR4; }
+`uvm_object_utils(ahb_write_burst_seq)
+function new(string name = "ahb_write_burst_seq"); super.new(name); endfunction
+function int unsigned beats_of(logic [2:0] b);
+case (b)
+B_INCR4, B_WRAP4  : return 4;
+B_INCR8, B_WRAP8  : return 8;
+B_INCR16,B_WRAP16 : return 16;
+default           : return 1;
+endcase
+endfunction
+task body();
+ahb_seq_item it;
+int unsigned N;
+it = ahb_seq_item::type_id::create("wr_burst");
+N  = beats_of(burst_type);
+start_item(it);
+it.dir       = AHB_WRITE;
+it.addr      = base_addr;
+it.trans     = T_NONSEQ;
+it.burst     = burst_type;
+it.size      = SZ_WORD;
+it.lock      = 1'b0;
+it.busreq    = 1'b1;
+it.num_beats = N;
+it.abort_aware  = abort_aware;
+it.max_attempts = max_attempts;
+it.beats_wr  = {};
+if (user_data.size() == N) begin
+it.beats_wr = user_data;
+end else begin
+for (int i = 0; i < N; i++) begin
+case (pattern)
+PAT_DEAD  : it.beats_wr.push_back(32'hDEAD_BE00 | i);
+PAT_INDEX : it.beats_wr.push_back(32'hAAAA_0000 | i);
+default   : it.beats_wr.push_back($urandom());
+endcase
+end
+end
+it.wdata    = it.beats_wr[0];
+it.exp_resp = R_OKAY;
+finish_item(it);
+`uvm_info("SEQ_WR", $sformatf("burst done base=0x%08h burst=%0d N=%0d",
+base_addr, burst_type, N), UVM_LOW)
+endtask
+endclass : ahb_write_burst_seq
+class ahb_read_burst_seq extends ahb_base_seq;
+rand logic [31:0]   base_addr;
+rand logic [2:0]    burst_type;
+logic [31:0]        rdata_out[$];
+bit                 abort_aware  = 1'b0;
+int unsigned        max_attempts = 1;
+constraint c_align { base_addr[1:0] == 2'b00; }
+constraint c_dflt  { soft burst_type == B_INCR4; }
+`uvm_object_utils(ahb_read_burst_seq)
+function new(string name = "ahb_read_burst_seq"); super.new(name); endfunction
+function int unsigned beats_of(logic [2:0] b);
+case (b)
+B_INCR4, B_WRAP4  : return 4;
+B_INCR8, B_WRAP8  : return 8;
+B_INCR16,B_WRAP16 : return 16;
+default           : return 1;
+endcase
+endfunction
+task body();
+ahb_seq_item it;
+int unsigned N;
+it = ahb_seq_item::type_id::create("rd_burst");
+N  = beats_of(burst_type);
+start_item(it);
+it.dir       = AHB_READ;
+it.addr      = base_addr;
+it.trans     = T_NONSEQ;
+it.burst     = burst_type;
+it.size      = SZ_WORD;
+it.lock      = 1'b0;
+it.busreq    = 1'b1;
+it.num_beats = N;
+it.abort_aware  = abort_aware;
+it.max_attempts = max_attempts;
+it.exp_resp  = R_OKAY;
+finish_item(it);
+rdata_out = it.beats_rd;
+`uvm_info("SEQ_RD", $sformatf("burst done base=0x%08h burst=%0d N=%0d",
+base_addr, burst_type, N), UVM_LOW)
+endtask
+endclass : ahb_read_burst_seq
+class ahb_force_seq extends uvm_sequence#(ahb_force_item);
+rand int unsigned slave_id;
+rand bit          op_split;
+rand bit          op_retry;
+rand int unsigned beat_index;
+int unsigned      num_forces = 1;
+constraint c_dflt {
+soft slave_id   == 1;
+soft op_split   == 1'b1;
+soft op_retry   == 1'b0;
+soft beat_index == 0;
+}
+`uvm_object_utils(ahb_force_seq)
+function new(string name = "ahb_force_seq"); super.new(name); endfunction
+task body();
+ahb_force_item it;
+it = ahb_force_item::type_id::create("force_it");
+start_item(it);
+it.slave_id   = slave_id;
+it.op_split   = op_split;
+it.op_retry   = op_retry;
+it.beat_index = beat_index;
+it.num_forces = num_forces;
+finish_item(it);
+`uvm_info("FORCE_SEQ", $sformatf("issued %s", it.convert2string()), UVM_LOW)
+endtask
+endclass : ahb_force_seq
+class ahb_m3_smoke_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_m3_smoke_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+function new(string name = "ahb_m3_smoke_vseq");
+super.new(name);
+endfunction
+task body();
+ahb_write_single_seq w_seq;
+ahb_read_single_seq  r_seq;
+logic [31:0] initial_val;
+`uvm_info("M3_SMOKE", "===== M3 Smoke Test Starting =====", UVM_LOW)
+`uvm_info("M3_SMOKE", "Step 1: Read initial S1[1] (expect 0x14 = 20)", UVM_LOW)
+r_seq = ahb_read_single_seq::type_id::create("r_seq_pre");
+r_seq.addr = 32'h0000_0004;
+r_seq.lock = 1'b0;
+r_seq.start(p_sequencer.mst_seqr());
+initial_val = r_seq.rdata;
+`uvm_info("M3_SMOKE",
+$sformatf("  → got 0x%08h, resp=%s",
+initial_val, ahb_seq_item::resp_name(r_seq.resp)),
+UVM_LOW)
+if (initial_val !== 32'h0000_0014)
+`uvm_warning("M3_SMOKE",
+$sformatf("Initial S1[1] = 0x%08h, expected 0x14",
+initial_val))
+`uvm_info("M3_SMOKE", "Step 2: Write 0xDEADBEEF to S1[1]", UVM_LOW)
+w_seq = ahb_write_single_seq::type_id::create("w_seq");
+w_seq.addr  = 32'h0000_0004;
+w_seq.wdata = 32'hDEAD_BEEF;
+w_seq.lock  = 1'b0;
+w_seq.start(p_sequencer.mst_seqr());
+`uvm_info("M3_SMOKE", "Step 3: Read back S1[1] (expect 0xDEADBEEF)", UVM_LOW)
+r_seq = ahb_read_single_seq::type_id::create("r_seq_post");
+r_seq.addr = 32'h0000_0004;
+r_seq.lock = 1'b0;
+r_seq.start(p_sequencer.mst_seqr());
+if (r_seq.rdata !== 32'hDEAD_BEEF)
+`uvm_error("M3_SMOKE",
+$sformatf("READBACK MISMATCH: exp=0xDEADBEEF act=0x%08h",
+r_seq.rdata))
+else
+`uvm_info("M3_SMOKE",
+$sformatf("READBACK OK: 0x%08h ✓", r_seq.rdata), UVM_LOW)
+if (r_seq.resp !== R_OKAY)
+`uvm_error("M3_SMOKE",
+$sformatf("Readback resp not OKAY: %s",
+ahb_seq_item::resp_name(r_seq.resp)))
+`uvm_info("M3_SMOKE", "===== M3 Smoke Test Completed =====", UVM_LOW)
+endtask
+endclass : ahb_m3_smoke_vseq
+class ahb_burst_writeread_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_burst_writeread_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0]  base_addr   = 32'h0000_0010;
+logic [2:0]   burst_type  = B_INCR4;
+burst_pat_e   pattern     = PAT_DEAD;
+bit           do_write    = 1'b1;
+bit           do_read     = 1'b1;
+function new(string name = "ahb_burst_writeread_vseq"); super.new(name); endfunction
+task body();
+ahb_write_burst_seq w;
+ahb_read_burst_seq  r;
+int unsigned N;
+logic [31:0] expected[$];
+case (burst_type)
+B_INCR4, B_WRAP4  : N = 4;
+B_INCR8, B_WRAP8  : N = 8;
+B_INCR16,B_WRAP16 : N = 16;
+default           : N = 1;
+endcase
+if (do_write) begin
+w = ahb_write_burst_seq::type_id::create("w");
+w.base_addr  = base_addr;
+w.burst_type = burst_type;
+w.pattern    = pattern;
+w.start(p_sequencer.mst_seqr());
+expected = {};
+for (int i = 0; i < N; i++) begin
+case (pattern)
+PAT_DEAD  : expected.push_back(32'hDEAD_BE00 | i);
+PAT_INDEX : expected.push_back(32'hAAAA_0000 | i);
+default   : expected.push_back(32'h0);
+endcase
+end
+end
+if (do_read) begin
+r = ahb_read_burst_seq::type_id::create("r");
+r.base_addr  = base_addr;
+r.burst_type = burst_type;
+r.start(p_sequencer.mst_seqr());
+if (do_write && pattern != PAT_RAND) begin
+for (int i = 0; i < r.rdata_out.size() && i < expected.size(); i++) begin
+if (r.rdata_out[i] !== expected[i])
+`uvm_error("VSEQ_CHK",
+$sformatf("read-back mismatch beat=%0d exp=0x%08h got=0x%08h",
+i, expected[i], r.rdata_out[i]))
+end
+end
+end
+`uvm_info("VSEQ", $sformatf("burst WR done base=0x%08h burst=%0d",
+base_addr, burst_type), UVM_LOW)
+endtask
+endclass : ahb_burst_writeread_vseq
+class ahb_force_single_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_force_single_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+int unsigned slave_id  = 1;
+bit          op_split  = 1'b1;
+bit          op_retry  = 1'b0;
+bit          is_write  = 1'b0;
+logic [31:0] base_addr = 32'h0000_0040;
+logic [31:0] wr_data   = 32'hDEAD_BEEF;
+bit          lock      = 1'b0;
+function new(string name = "ahb_force_single_vseq"); super.new(name); endfunction
+task body();
+ahb_force_seq        fseq;
+ahb_write_single_seq wseq;
+ahb_read_single_seq  rseq;
+fseq = ahb_force_seq::type_id::create("fseq");
+fseq.slave_id   = slave_id;
+fseq.op_split   = op_split;
+fseq.op_retry   = op_retry;
+fseq.beat_index = 0;
+fork
+fseq.start(p_sequencer.slv_rsp_seqr_h);
+begin
+if (is_write) begin
+wseq = ahb_write_single_seq::type_id::create("wseq");
+wseq.addr  = base_addr;
+wseq.wdata = wr_data;
+wseq.lock  = lock;
+wseq.start(p_sequencer.mst_seqr());
+end else begin
+rseq = ahb_read_single_seq::type_id::create("rseq");
+rseq.addr = base_addr;
+rseq.lock = lock;
+rseq.start(p_sequencer.mst_seqr());
+end
+end
+join
+`uvm_info("FORCE_VSEQ",
+$sformatf("done slv=%0d split=%0b retry=%0b dir=%s base=0x%08h lock=%0b",
+slave_id, op_split, op_retry, is_write ? "W" : "R",
+base_addr, lock), UVM_LOW)
+endtask
+endclass : ahb_force_single_vseq
+class ahb_retry_recover_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_retry_recover_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+int unsigned slave_id  = 1;
+bit          is_write  = 1'b0;
+int unsigned num_retry = 2;
+logic [31:0] base_addr = 32'h0000_0040;
+logic [31:0] wr_data   = 32'hDEAD_BEEF;
+function new(string name = "ahb_retry_recover_vseq"); super.new(name); endfunction
+task body();
+ahb_force_seq        fseq;
+ahb_write_single_seq wseq;
+ahb_read_single_seq  rseq;
+fseq = ahb_force_seq::type_id::create("fseq");
+fseq.slave_id   = slave_id;
+fseq.op_split   = 1'b0;
+fseq.op_retry   = 1'b1;
+fseq.beat_index = 0;
+fseq.num_forces = num_retry;
+fork
+fseq.start(p_sequencer.slv_rsp_seqr_h);
+begin
+if (is_write) begin
+wseq = ahb_write_single_seq::type_id::create("wseq");
+wseq.addr         = base_addr;
+wseq.wdata        = wr_data;
+wseq.max_attempts = num_retry + 1;
+wseq.start(p_sequencer.mst_seqr());
+end else begin
+rseq = ahb_read_single_seq::type_id::create("rseq");
+rseq.addr         = base_addr;
+rseq.max_attempts = num_retry + 1;
+rseq.start(p_sequencer.mst_seqr());
+end
+end
+join
+if (is_write) begin
+ahb_read_single_seq verify_rd;
+verify_rd = ahb_read_single_seq::type_id::create("verify_rd");
+verify_rd.addr = base_addr;
+verify_rd.start(p_sequencer.mst_seqr());
+if (verify_rd.rdata !== wr_data)
+`uvm_error("RETRY_VSEQ",
+$sformatf("DATA INTEGRITY FAIL sau retry-write: addr=0x%08h exp=0x%08h act=0x%08h",
+base_addr, wr_data, verify_rd.rdata))
+else
+`uvm_info("RETRY_VSEQ",
+$sformatf("DATA INTEGRITY OK: doc lai 0x%08h == da ghi 0x%08h",
+verify_rd.rdata, wr_data), UVM_LOW)
+end
+`uvm_info("RETRY_VSEQ",
+$sformatf("done slv=%0d dir=%s base=0x%08h num_retry=%0d",
+slave_id, is_write ? "W" : "R", base_addr, num_retry), UVM_LOW)
+endtask
+endclass : ahb_retry_recover_vseq
+class ahb_force_burst_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_force_burst_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+int unsigned slave_id   = 1;
+bit          op_split   = 1'b1;
+bit          op_retry   = 1'b0;
+bit          is_write   = 1'b1;
+int unsigned beat_index = 2;
+int unsigned max_attempts = 1;
+logic [31:0] base_addr  = 32'h0000_0040;
+logic [2:0]  burst_type = B_INCR4;
+burst_pat_e  pattern    = PAT_DEAD;
+function new(string name = "ahb_force_burst_vseq"); super.new(name); endfunction
+task body();
+ahb_force_seq       fseq;
+ahb_write_burst_seq wbseq;
+ahb_read_burst_seq  rbseq;
+fseq = ahb_force_seq::type_id::create("fseq");
+fseq.slave_id   = slave_id;
+fseq.op_split   = op_split;
+fseq.op_retry   = op_retry;
+fseq.beat_index = beat_index;
+fseq.num_forces = 1;
+fork
+fseq.start(p_sequencer.slv_rsp_seqr_h);
+begin
+if (is_write) begin
+wbseq = ahb_write_burst_seq::type_id::create("wbseq");
+wbseq.base_addr    = base_addr;
+wbseq.burst_type   = burst_type;
+wbseq.pattern      = pattern;
+wbseq.abort_aware  = 1'b1;
+wbseq.max_attempts = max_attempts;
+wbseq.start(p_sequencer.mst_seqr());
+end else begin
+rbseq = ahb_read_burst_seq::type_id::create("rbseq");
+rbseq.base_addr    = base_addr;
+rbseq.burst_type   = burst_type;
+rbseq.abort_aware  = 1'b1;
+rbseq.max_attempts = max_attempts;
+rbseq.start(p_sequencer.mst_seqr());
+end
+end
+join
+`uvm_info("FBURST_VSEQ",
+$sformatf("done slv=%0d %s dir=%s beat=%0d base=0x%08h max_att=%0d",
+slave_id, op_split ? "SPLIT" : "RETRY",
+is_write ? "W" : "R", beat_index, base_addr, max_attempts),
+UVM_LOW)
+endtask
+endclass : ahb_force_burst_vseq
+class ahb_l2_grant_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_grant_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] base_addr = 32'h0000_0010;
+logic [31:0] wdata     = 32'h6001_A5A5;
+function new(string name = "ahb_l2_grant_vseq"); super.new(name); endfunction
+task body();
+ahb_write_single_seq w;
+ahb_read_single_seq  r;
+`uvm_info("L2_GRANT", "T2.1: M1 grant-from-IDLE -> single WR/RD S1", UVM_LOW)
+w = ahb_write_single_seq::type_id::create("w");
+w.addr = base_addr; w.wdata = wdata;
+w.start(p_sequencer.mst_seqr());
+r = ahb_read_single_seq::type_id::create("r");
+r.addr = base_addr;
+r.start(p_sequencer.mst_seqr());
+if (r.rdata !== wdata)
+`uvm_error("L2_GRANT",
+$sformatf("readback FAIL exp=0x%08h got=0x%08h", wdata, r.rdata))
+else
+`uvm_info("L2_GRANT",
+$sformatf("grant clean, readback OK 0x%08h (no ghost)", r.rdata), UVM_LOW)
+endtask
+endclass : ahb_l2_grant_vseq
+class ahb_l2_wr_rd_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_wr_rd_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] base_addr = 32'h0000_0010;
+logic [31:0] wdata     = 32'h5A5A_0010;
+function new(string name = "ahb_l2_wr_rd_vseq"); super.new(name); endfunction
+task body();
+ahb_write_single_seq w;
+ahb_read_single_seq  r;
+`uvm_info("L2_WRRD",
+$sformatf("T2.2: WR/RD @0x%08h = 0x%08h via interconnect",
+base_addr, wdata), UVM_LOW)
+w = ahb_write_single_seq::type_id::create("w");
+w.addr = base_addr; w.wdata = wdata;
+w.start(p_sequencer.mst_seqr());
+r = ahb_read_single_seq::type_id::create("r");
+r.addr = base_addr;
+r.start(p_sequencer.mst_seqr());
+if (r.rdata !== wdata)
+`uvm_error("L2_WRRD",
+$sformatf("readback FAIL exp=0x%08h got=0x%08h", wdata, r.rdata))
+else
+`uvm_info("L2_WRRD",
+$sformatf("readback OK 0x%08h resp=%s", r.rdata,
+ahb_seq_item::resp_name(r.resp)), UVM_LOW)
+endtask
+endclass : ahb_l2_wr_rd_vseq
+class ahb_l2_decoder_sweep_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_decoder_sweep_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+function new(string name = "ahb_l2_decoder_sweep_vseq"); super.new(name); endfunction
+task do_wr_rd(logic [31:0] a, logic [31:0] d, string tag);
+ahb_write_single_seq w;
+ahb_read_single_seq  r;
+w = ahb_write_single_seq::type_id::create({"w_", tag});
+w.addr = a; w.wdata = d;
+w.start(p_sequencer.mst_seqr());
+r = ahb_read_single_seq::type_id::create({"r_", tag});
+r.addr = a;
+r.start(p_sequencer.mst_seqr());
+if (r.rdata !== d)
+`uvm_error("L2_DEC",
+$sformatf("%s @0x%08h FAIL exp=0x%08h got=0x%08h", tag, a, d, r.rdata))
+else
+`uvm_info("L2_DEC",
+$sformatf("%s @0x%08h OK 0x%08h", tag, a, r.rdata), UVM_LOW)
+endtask
+task body();
+`uvm_info("L2_DEC", "T2.3: decoder sweep S2 then S3", UVM_LOW)
+do_wr_rd(32'h4000_0010, 32'hCAFE_1234, "S2");
+do_wr_rd(32'h8000_0010, 32'hBEEF_5678, "S3");
+endtask
+endclass : ahb_l2_decoder_sweep_vseq
+class ahb_l2_default_err_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_default_err_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+function new(string name = "ahb_l2_default_err_vseq"); super.new(name); endfunction
+task body();
+ahb_read_single_seq  rd_def, rd_seed;
+ahb_write_single_seq wr_def;
+`uvm_info("L2_DEF", "T2.4: default-slave ERROR (read + write)", UVM_LOW)
+rd_def = ahb_read_single_seq::type_id::create("rd_def");
+rd_def.addr = 32'hC000_0000;
+rd_def.start(p_sequencer.mst_seqr());
+if (rd_def.resp !== R_ERROR)
+`uvm_error("L2_DEF",
+$sformatf("READ default expected ERROR got %s",
+ahb_seq_item::resp_name(rd_def.resp)))
+else
+`uvm_info("L2_DEF", "READ default -> ERROR (OK)", UVM_LOW)
+wr_def = ahb_write_single_seq::type_id::create("wr_def");
+wr_def.addr = 32'hD000_0040; wr_def.wdata = 32'hBADB_AD00;
+wr_def.start(p_sequencer.mst_seqr());
+if (wr_def.resp !== R_ERROR)
+`uvm_error("L2_DEF",
+$sformatf("WRITE default expected ERROR got %s",
+ahb_seq_item::resp_name(wr_def.resp)))
+else
+`uvm_info("L2_DEF", "WRITE default -> ERROR (OK)", UVM_LOW)
+rd_seed = ahb_read_single_seq::type_id::create("rd_seed");
+rd_seed.addr = 32'h0000_0000;
+rd_seed.start(p_sequencer.mst_seqr());
+if (rd_seed.rdata !== 32'h0000_000A)
+`uvm_error("L2_DEF",
+$sformatf("S1[0] seed corrupted after default access: 0x%08h",
+rd_seed.rdata))
+else
+`uvm_info("L2_DEF", "S1[0] seed intact = 0x0A (no side-effect)", UVM_LOW)
+endtask
+endclass : ahb_l2_default_err_vseq
+class ahb_l2_boundary_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_boundary_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+function new(string name = "ahb_l2_boundary_vseq"); super.new(name); endfunction
+task wr_ok(logic [31:0] a, logic [31:0] d, string tag);
+ahb_write_single_seq w;
+ahb_read_single_seq  r;
+w = ahb_write_single_seq::type_id::create({"w_", tag});
+w.addr = a; w.wdata = d;
+w.start(p_sequencer.mst_seqr());
+if (w.resp !== R_OKAY)
+`uvm_error("L2_BND",
+$sformatf("%s @0x%08h expected OKAY got %s", tag, a,
+ahb_seq_item::resp_name(w.resp)))
+r = ahb_read_single_seq::type_id::create({"r_", tag});
+r.addr = a;
+r.start(p_sequencer.mst_seqr());
+if (r.rdata !== d)
+`uvm_error("L2_BND",
+$sformatf("%s @0x%08h readback FAIL exp=0x%08h got=0x%08h",
+tag, a, d, r.rdata))
+else
+`uvm_info("L2_BND", $sformatf("%s @0x%08h OK", tag, a), UVM_LOW)
+endtask
+task body();
+ahb_write_single_seq w_def;
+`uvm_info("L2_BND", "T2.5: decode boundary sweep", UVM_LOW)
+wr_ok(32'h3FFF_FFFC, 32'h1111_0001, "S1_last");
+wr_ok(32'h4000_0000, 32'h2222_0002, "S2_first");
+wr_ok(32'hBFFF_FFFC, 32'h3333_0003, "S3_last");
+w_def = ahb_write_single_seq::type_id::create("w_def");
+w_def.addr = 32'hC000_0000; w_def.wdata = 32'h4444_0004;
+w_def.start(p_sequencer.mst_seqr());
+if (w_def.resp !== R_ERROR)
+`uvm_error("L2_BND",
+$sformatf("default-first expected ERROR got %s",
+ahb_seq_item::resp_name(w_def.resp)))
+else
+`uvm_info("L2_BND", "default-first -> ERROR (OK)", UVM_LOW)
+endtask
+endclass : ahb_l2_boundary_vseq
+class ahb_l2_cross_raw_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_cross_raw_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+function new(string name = "ahb_l2_cross_raw_vseq"); super.new(name); endfunction
+task body();
+ahb_write_single_seq w1;
+ahb_read_single_seq  r_s2, r_s1;
+logic [31:0] s2_seed_w2 = 32'h0000_003C;
+`uvm_info("L2_RAW", "T2.7: WR S1 -> RD S2 seed -> RD S1", UVM_LOW)
+w1 = ahb_write_single_seq::type_id::create("w1");
+w1.addr = 32'h0000_0030; w1.wdata = 32'hAAAA_BBBB;
+w1.start(p_sequencer.mst_seqr());
+r_s2 = ahb_read_single_seq::type_id::create("r_s2");
+r_s2.addr = 32'h4000_0008;
+r_s2.start(p_sequencer.mst_seqr());
+if (r_s2.rdata !== s2_seed_w2)
+`uvm_error("L2_RAW",
+$sformatf("S2 seed read FAIL exp=0x%08h got=0x%08h",
+s2_seed_w2, r_s2.rdata))
+r_s1 = ahb_read_single_seq::type_id::create("r_s1");
+r_s1.addr = 32'h0000_0030;
+r_s1.start(p_sequencer.mst_seqr());
+if (r_s1.rdata !== 32'hAAAA_BBBB)
+`uvm_error("L2_RAW",
+$sformatf("S1 readback FAIL exp=0xAAAABBBB got=0x%08h", r_s1.rdata))
+else
+`uvm_info("L2_RAW", "cross-slave RAW OK (no data mixing)", UVM_LOW)
+endtask
+endclass : ahb_l2_cross_raw_vseq
+class ahb_l2_burst_intc_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_burst_intc_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+function new(string name = "ahb_l2_burst_intc_vseq"); super.new(name); endfunction
+task run_burst(logic [31:0] base, logic [2:0] bt, burst_pat_e pat,
+int unsigned N, string tag);
+ahb_write_burst_seq w;
+ahb_read_burst_seq  r;
+logic [31:0] exp[$];
+w = ahb_write_burst_seq::type_id::create({"wb_", tag});
+w.base_addr = base; w.burst_type = bt; w.pattern = pat;
+w.start(p_sequencer.mst_seqr());
+exp = {};
+for (int i = 0; i < N; i++)
+case (pat)
+PAT_DEAD  : exp.push_back(32'hDEAD_BE00 | i);
+PAT_INDEX : exp.push_back(32'hAAAA_0000 | i);
+default   : exp.push_back(32'h0);
+endcase
+r = ahb_read_burst_seq::type_id::create({"rb_", tag});
+r.base_addr = base; r.burst_type = bt;
+r.start(p_sequencer.mst_seqr());
+for (int i = 0; i < r.rdata_out.size() && i < exp.size(); i++)
+if (r.rdata_out[i] !== exp[i])
+`uvm_error("L2_BURST",
+$sformatf("%s beat %0d FAIL exp=0x%08h got=0x%08h",
+tag, i, exp[i], r.rdata_out[i]))
+`uvm_info("L2_BURST", $sformatf("%s burst done (%0d beats)", tag, N), UVM_LOW)
+endtask
+task body();
+`uvm_info("L2_BURST", "T2.8: INCR4->S1 then INCR8->S2 via interconnect", UVM_LOW)
+run_burst(32'h0000_0040, B_INCR4, PAT_INDEX, 4, "S1_INCR4");
+run_burst(32'h4000_0100, B_INCR8, PAT_DEAD,  8, "S2_INCR8");
+endtask
+endclass : ahb_l2_burst_intc_vseq
+class ahb_l2_slave_sweep_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_slave_sweep_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+function new(string name = "ahb_l2_slave_sweep_vseq"); super.new(name); endfunction
+task wr(logic [31:0] a, logic [31:0] d, logic [1:0] exp_resp, string tag);
+ahb_write_single_seq w;
+w = ahb_write_single_seq::type_id::create({"w_", tag});
+w.addr = a; w.wdata = d;
+w.start(p_sequencer.mst_seqr());
+if (w.resp !== exp_resp)
+`uvm_error("L2_SWEEP",
+$sformatf("%s @0x%08h resp %s (expected %s)", tag, a,
+ahb_seq_item::resp_name(w.resp),
+ahb_seq_item::resp_name(exp_resp)))
+endtask
+task body();
+ahb_read_single_seq r;
+`uvm_info("L2_SWEEP", "T2.11: S1->S2->S3->Default->S1", UVM_LOW)
+wr(32'h0000_0060, 32'h1111_0060, R_OKAY,  "S1");
+wr(32'h4000_0060, 32'h2222_0060, R_OKAY,  "S2");
+wr(32'h8000_0060, 32'h3333_0060, R_OKAY,  "S3");
+wr(32'hC000_0060, 32'h4444_0060, R_ERROR, "DEF");
+r = ahb_read_single_seq::type_id::create("r_s1");
+r.addr = 32'h0000_0060;
+r.start(p_sequencer.mst_seqr());
+if (r.rdata !== 32'h1111_0060)
+`uvm_error("L2_SWEEP",
+$sformatf("final S1 read FAIL exp=0x11110060 got=0x%08h", r.rdata))
+else
+`uvm_info("L2_SWEEP", "sweep OK, final S1 read matches", UVM_LOW)
+endtask
+endclass : ahb_l2_slave_sweep_vseq
+class ahb_idle_hold_seq extends ahb_base_seq;
+`uvm_object_utils(ahb_idle_hold_seq)
+int unsigned hold_cycles = 3;
+function new(string name = "ahb_idle_hold_seq"); super.new(name); endfunction
+task body();
+ahb_seq_item it;
+it = ahb_seq_item::type_id::create("idle_it");
+start_item(it);
+it.dir              = AHB_READ;
+it.addr             = 32'h0;
+it.wdata            = 32'h0;
+it.trans            = T_IDLE;
+it.burst            = B_SINGLE;
+it.size             = SZ_WORD;
+it.lock             = 1'b0;
+it.busreq           = 1'b1;
+it.num_beats        = 1;
+it.max_attempts     = 1;
+it.abort_aware      = 1'b0;
+it.idle_hold_cycles = hold_cycles;
+finish_item(it);
+endtask
+endclass : ahb_idle_hold_seq
+class ahb_l2_hready_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_hready_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] base_addr = 32'h0000_0020;
+logic [31:0] wdata     = 32'h1234_ABCD;
+function new(string name = "ahb_l2_hready_vseq"); super.new(name); endfunction
+task body();
+ahb_write_single_seq w;
+ahb_read_single_seq  r;
+`uvm_info("L2_HREADY",
+"T2.6: WR/RD S1 qua wait-state — kiem vong HREADY feedback", UVM_LOW)
+w = ahb_write_single_seq::type_id::create("w");
+w.addr = base_addr; w.wdata = wdata;
+w.start(p_sequencer.mst_seqr());
+r = ahb_read_single_seq::type_id::create("r");
+r.addr = base_addr;
+r.start(p_sequencer.mst_seqr());
+if (r.rdata !== wdata)
+`uvm_error("L2_HREADY",
+$sformatf("readback FAIL exp=0x%08h got=0x%08h (vong HREADY sai?)",
+wdata, r.rdata))
+else
+`uvm_info("L2_HREADY",
+"readback OK — mux giu du lieu qua wait-state, pipeline resume dung",
+UVM_LOW)
+endtask
+endclass : ahb_l2_hready_vseq
+class ahb_l2_split_recover_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_split_recover_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+int unsigned slave_id  = 1;
+logic [31:0] base_addr = 32'h0000_0000;
+logic [31:0] exp_rdata = 32'h0000_000A;
+function new(string name = "ahb_l2_split_recover_vseq"); super.new(name); endfunction
+task body();
+ahb_force_seq       fseq;
+ahb_read_single_seq rseq;
+fseq = ahb_force_seq::type_id::create("fseq");
+fseq.slave_id   = slave_id;
+fseq.op_split   = 1'b1;
+fseq.op_retry   = 1'b0;
+fseq.beat_index = 0;
+fseq.num_forces = 1;
+fork
+fseq.start(p_sequencer.slv_rsp_seqr_h);
+begin
+rseq = ahb_read_single_seq::type_id::create("rseq");
+rseq.addr         = base_addr;
+rseq.max_attempts = 3;
+rseq.start(p_sequencer.mst_seqr());
+end
+join
+if (rseq.resp !== R_OKAY)
+`uvm_error("L2_SPLIT",
+$sformatf("SPLIT recovery KHONG dat OKAY: final resp=%s",
+ahb_seq_item::resp_name(rseq.resp)))
+else if (rseq.rdata !== exp_rdata)
+`uvm_error("L2_SPLIT",
+$sformatf("recovered nhung data sai exp=0x%08h got=0x%08h",
+exp_rdata, rseq.rdata))
+else
+`uvm_info("L2_SPLIT",
+$sformatf("SPLIT recovered -> OKAY, rdata=0x%08h dung seed", rseq.rdata),
+UVM_LOW)
+endtask
+endclass : ahb_l2_split_recover_vseq
+class ahb_l2_idle_intc_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_idle_intc_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+int unsigned hold = 3;
+function new(string name = "ahb_l2_idle_intc_vseq"); super.new(name); endfunction
+task body();
+ahb_idle_hold_seq   idle;
+ahb_read_single_seq r;
+`uvm_info("L2_IDLE",
+$sformatf("T2.10: M1 granted, giu IDLE %0d chu ky roi doc that", hold),
+UVM_LOW)
+idle = ahb_idle_hold_seq::type_id::create("idle");
+idle.hold_cycles = hold;
+idle.start(p_sequencer.mst_seqr());
+r = ahb_read_single_seq::type_id::create("r");
+r.addr = 32'h0000_0000;
+r.start(p_sequencer.mst_seqr());
+if (r.rdata !== 32'h0000_000A)
+`uvm_error("L2_IDLE",
+$sformatf("post-idle read S1[0] sai exp=0x0A got=0x%08h", r.rdata))
+else
+`uvm_info("L2_IDLE", "post-idle read S1[0]=0x0A OK — he thong hoi phuc",
+UVM_LOW)
+endtask
+endclass : ahb_l2_idle_intc_vseq
+class ahb_l2_both_idle_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l2_both_idle_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+int unsigned m1_hold = 10;
+int unsigned m2_hold = 4;
+function new(string name = "ahb_l2_both_idle_vseq"); super.new(name); endfunction
+task body();
+ahb_idle_hold_seq   m1_idle, m2_idle;
+ahb_read_single_seq r;
+`uvm_info("L2_BOTH_IDLE",
+"T2.13: M1 idle -> idle_force_switch -> M2 idle (khong tranh chap)",
+UVM_LOW)
+m1_idle = ahb_idle_hold_seq::type_id::create("m1_idle");
+m1_idle.hold_cycles = m1_hold;
+m2_idle = ahb_idle_hold_seq::type_id::create("m2_idle");
+m2_idle.hold_cycles = m2_hold;
+fork
+m1_idle.start(p_sequencer.m1_seqr_h);
+m2_idle.start(p_sequencer.m2_seqr_h);
+join
+r = ahb_read_single_seq::type_id::create("r");
+r.addr = 32'h0000_0000;
+r.start(p_sequencer.m1_seqr_h);
+if (r.rdata !== 32'h0000_000A)
+`uvm_error("L2_BOTH_IDLE",
+$sformatf("post-idle read S1[0] sai exp=0x0A got=0x%08h", r.rdata))
+else
+`uvm_info("L2_BOTH_IDLE",
+"post-idle read OK — grant handoff M1->M2 sach, khong tranh chap",
+UVM_LOW)
+endtask
+endclass : ahb_l2_both_idle_vseq
+class ahb_l3_round_robin_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_round_robin_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+int unsigned rounds = 2;
+function new(string name = "ahb_l3_round_robin_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_RR",
+$sformatf("T3.1: M1+M2 cung xin bus, moi master ghi %0d word xen ke",
+rounds), UVM_LOW)
+fork
+begin : m1_wr_thr
+for (int i = 0; i < rounds; i++) begin
+ahb_write_single_seq w;
+w = ahb_write_single_seq::type_id::create($sformatf("m1_w%0d", i));
+w.addr  = 32'h0000_0110 + 4*i;
+w.wdata = 32'hA100_0000 + i;
+w.start(p_sequencer.m1_seqr_h);
+if (w.resp !== R_OKAY)
+`uvm_error("L3_RR",
+$sformatf("M1 write %0d resp=%s != OKAY", i,
+ahb_seq_item::resp_name(w.resp)))
+end
+end
+begin : m2_wr_thr
+for (int i = 0; i < rounds; i++) begin
+ahb_write_single_seq w;
+w = ahb_write_single_seq::type_id::create($sformatf("m2_w%0d", i));
+w.addr  = 32'h4000_0110 + 4*i;
+w.wdata = 32'hB200_0000 + i;
+w.start(p_sequencer.m2_seqr_h);
+if (w.resp !== R_OKAY)
+`uvm_error("L3_RR",
+$sformatf("M2 write %0d resp=%s != OKAY", i,
+ahb_seq_item::resp_name(w.resp)))
+end
+end
+join
+for (int i = 0; i < rounds; i++) begin
+ahb_read_single_seq r;
+r = ahb_read_single_seq::type_id::create($sformatf("m1_r%0d", i));
+r.addr = 32'h0000_0110 + 4*i;
+r.start(p_sequencer.m1_seqr_h);
+if (r.rdata !== (32'hA100_0000 + i))
+`uvm_error("L3_RR",
+$sformatf("M1 readback %0d FAIL exp=0x%08h got=0x%08h",
+i, 32'hA100_0000 + i, r.rdata))
+end
+for (int i = 0; i < rounds; i++) begin
+ahb_read_single_seq r;
+r = ahb_read_single_seq::type_id::create($sformatf("m2_r%0d", i));
+r.addr = 32'h4000_0110 + 4*i;
+r.start(p_sequencer.m2_seqr_h);
+if (r.rdata !== (32'hB200_0000 + i))
+`uvm_error("L3_RR",
+$sformatf("M2 readback %0d FAIL exp=0x%08h got=0x%08h",
+i, 32'hB200_0000 + i, r.rdata))
+end
+`uvm_info("L3_RR", "T3.1 traffic + readback hoan tat", UVM_LOW)
+endtask
+endclass : ahb_l3_round_robin_vseq
+class ahb_l3_m2_only_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_m2_only_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] base_addr = 32'h8000_0110;
+logic [31:0] wdata     = 32'h32B2_0002;
+function new(string name = "ahb_l3_m2_only_vseq"); super.new(name); endfunction
+task body();
+ahb_write_single_seq w;
+ahb_read_single_seq  r;
+`uvm_info("L3_M2ONLY",
+$sformatf("T3.2: chi M2 xin bus tu IDLE, WR/RD @0x%08h", base_addr),
+UVM_LOW)
+w = ahb_write_single_seq::type_id::create("w");
+w.addr = base_addr; w.wdata = wdata;
+w.start(p_sequencer.m2_seqr_h);
+if (w.resp !== R_OKAY)
+`uvm_error("L3_M2ONLY",
+$sformatf("M2 write resp=%s != OKAY",
+ahb_seq_item::resp_name(w.resp)))
+r = ahb_read_single_seq::type_id::create("r");
+r.addr = base_addr;
+r.start(p_sequencer.m2_seqr_h);
+if (r.rdata !== wdata)
+`uvm_error("L3_M2ONLY",
+$sformatf("M2 readback FAIL exp=0x%08h got=0x%08h",
+wdata, r.rdata))
+else
+`uvm_info("L3_M2ONLY",
+$sformatf("M2 WR/RD S3 OK 0x%08h (HMASTER=1 evidence o bus mon)",
+r.rdata), UVM_LOW)
+endtask
+endclass : ahb_l3_m2_only_vseq
+class ahb_l3_handover_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_handover_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] m1_addr = 32'h0000_0120;
+logic [31:0] m1_data = 32'hA1DE_0001;
+logic [31:0] m2_addr = 32'h4000_0120;
+logic [31:0] m2_data = 32'hB2DE_0002;
+function new(string name = "ahb_l3_handover_vseq"); super.new(name); endfunction
+task body();
+ahb_write_single_seq w1, w2;
+ahb_read_single_seq  r1, r2;
+`uvm_info("L3_HANDOVER",
+"T3.3/T3.4: M1 & M2 cung xin bus (dong thoi); M1 thang truoc (last=2), M2 cho",
+UVM_LOW)
+fork
+begin : m1_thr
+w1 = ahb_write_single_seq::type_id::create("w1");
+w1.addr = m1_addr; w1.wdata = m1_data;
+w1.start(p_sequencer.m1_seqr_h);
+if (w1.resp !== R_OKAY)
+`uvm_error("L3_HANDOVER",
+$sformatf("M1 transfer bi cat/loi: resp=%s",
+ahb_seq_item::resp_name(w1.resp)))
+end
+begin : m2_thr
+w2 = ahb_write_single_seq::type_id::create("w2");
+w2.addr = m2_addr; w2.wdata = m2_data;
+w2.start(p_sequencer.m2_seqr_h);
+if (w2.resp !== R_OKAY)
+`uvm_error("L3_HANDOVER",
+$sformatf("M2 transfer sau handover loi: resp=%s",
+ahb_seq_item::resp_name(w2.resp)))
+end
+join
+r1 = ahb_read_single_seq::type_id::create("r1");
+r1.addr = m1_addr;
+r1.start(p_sequencer.m1_seqr_h);
+if (r1.rdata !== m1_data)
+`uvm_error("L3_HANDOVER",
+$sformatf("M1 readback FAIL exp=0x%08h got=0x%08h",
+m1_data, r1.rdata))
+r2 = ahb_read_single_seq::type_id::create("r2");
+r2.addr = m2_addr;
+r2.start(p_sequencer.m2_seqr_h);
+if (r2.rdata !== m2_data)
+`uvm_error("L3_HANDOVER",
+$sformatf("M2 readback FAIL exp=0x%08h got=0x%08h",
+m2_data, r2.rdata))
+else
+`uvm_info("L3_HANDOVER",
+"handover sach: M1 hoan tat truoc, M2 thanh cong sau", UVM_LOW)
+endtask
+endclass : ahb_l3_handover_vseq
+class ahb_l3_idle_force_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_idle_force_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+int unsigned m1_hold = 12;
+logic [31:0] m2_addr = 32'h4000_0140;
+logic [31:0] m2_data = 32'hB2F0_0007;
+function new(string name = "ahb_l3_idle_force_vseq"); super.new(name); endfunction
+task body();
+ahb_idle_hold_seq m1_idle;
+ahb_write_single_seq w;
+ahb_read_single_seq  r;
+`uvm_info("L3_IDLEF",
+$sformatf("T3.7: M1 giu IDLE %0d chu ky (van req), M2 xin bus -> idle_force_switch",
+m1_hold), UVM_LOW)
+fork
+begin : m1_thr
+m1_idle = ahb_idle_hold_seq::type_id::create("m1_idle");
+m1_idle.hold_cycles = m1_hold;
+m1_idle.start(p_sequencer.m1_seqr_h);
+end
+begin : m2_thr
+w = ahb_write_single_seq::type_id::create("w");
+w.addr = m2_addr; w.wdata = m2_data;
+w.start(p_sequencer.m2_seqr_h);
+if (w.resp !== R_OKAY)
+`uvm_error("L3_IDLEF",
+$sformatf("M2 write sau force-switch loi: resp=%s",
+ahb_seq_item::resp_name(w.resp)))
+r = ahb_read_single_seq::type_id::create("r");
+r.addr = m2_addr;
+r.start(p_sequencer.m2_seqr_h);
+if (r.rdata !== m2_data)
+`uvm_error("L3_IDLEF",
+$sformatf("M2 readback FAIL exp=0x%08h got=0x%08h",
+m2_data, r.rdata))
+else
+`uvm_info("L3_IDLEF",
+"M2 transfer OK ngay sau idle_force_switch (khong ping-pong)", UVM_LOW)
+end
+join
+endtask
+endclass : ahb_l3_idle_force_vseq
+class ahb_l3_err_recovery_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_err_recovery_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+function new(string name = "ahb_l3_err_recovery_vseq"); super.new(name); endfunction
+task body();
+ahb_write_single_seq w_def, w2, w1;
+ahb_read_single_seq  r2, r1;
+`uvm_info("L3_ERRREC",
+"T3.13: M1 ERROR o default -> M2 OK -> M1 tu hoi phuc", UVM_LOW)
+w_def = ahb_write_single_seq::type_id::create("w_def");
+w_def.addr = 32'hC000_0010; w_def.wdata = 32'hBAD0_0D13;
+w_def.start(p_sequencer.m1_seqr_h);
+if (w_def.resp !== R_ERROR)
+`uvm_error("L3_ERRREC",
+$sformatf("M1 default write expected ERROR got %s",
+ahb_seq_item::resp_name(w_def.resp)))
+else
+`uvm_info("L3_ERRREC", "M1 nhan ERROR dung giao thuc", UVM_LOW)
+w2 = ahb_write_single_seq::type_id::create("w2");
+w2.addr = 32'h8000_0130; w2.wdata = 32'hB2E0_0003;
+w2.start(p_sequencer.m2_seqr_h);
+if (w2.resp !== R_OKAY)
+`uvm_error("L3_ERRREC",
+$sformatf("M2 write sau ERROR cua M1 loi: resp=%s",
+ahb_seq_item::resp_name(w2.resp)))
+r2 = ahb_read_single_seq::type_id::create("r2");
+r2.addr = 32'h8000_0130;
+r2.start(p_sequencer.m2_seqr_h);
+if (r2.rdata !== 32'hB2E0_0003)
+`uvm_error("L3_ERRREC",
+$sformatf("M2 readback FAIL exp=0xB2E00003 got=0x%08h", r2.rdata))
+w1 = ahb_write_single_seq::type_id::create("w1");
+w1.addr = 32'h0000_0130; w1.wdata = 32'hA1E0_0004;
+w1.start(p_sequencer.m1_seqr_h);
+if (w1.resp !== R_OKAY)
+`uvm_error("L3_ERRREC",
+$sformatf("M1 khong hoi phuc sau ERROR: resp=%s",
+ahb_seq_item::resp_name(w1.resp)))
+r1 = ahb_read_single_seq::type_id::create("r1");
+r1.addr = 32'h0000_0130;
+r1.start(p_sequencer.m1_seqr_h);
+if (r1.rdata !== 32'hA1E0_0004)
+`uvm_error("L3_ERRREC",
+$sformatf("M1 readback FAIL exp=0xA1E00004 got=0x%08h", r1.rdata))
+else
+`uvm_info("L3_ERRREC",
+"recovery OK: M2 khong bi anh huong, M1 khong stuck", UVM_LOW)
+endtask
+endclass : ahb_l3_err_recovery_vseq
+class ahb_lock_write_burst_seq extends ahb_base_seq;
+rand logic [31:0]   base_addr;
+rand logic [2:0]    burst_type;
+burst_pat_e         pattern      = PAT_INDEX;
+logic [31:0]        user_data[$];
+bit                 abort_aware  = 1'b0;
+int unsigned        max_attempts = 1;
+logic [1:0]   resp;
+constraint c_align { base_addr[1:0] == 2'b00; }
+constraint c_dflt  { soft burst_type == B_INCR4; }
+`uvm_object_utils(ahb_lock_write_burst_seq)
+function new(string name = "ahb_lock_write_burst_seq"); super.new(name); endfunction
+function int unsigned beats_of(logic [2:0] b);
+case (b)
+B_INCR4, B_WRAP4  : return 4;
+B_INCR8, B_WRAP8  : return 8;
+B_INCR16,B_WRAP16 : return 16;
+default           : return 1;
+endcase
+endfunction
+task body();
+ahb_seq_item it;
+int unsigned N;
+it = ahb_seq_item::type_id::create("lock_wr_burst");
+N  = beats_of(burst_type);
+start_item(it);
+it.dir          = AHB_WRITE;
+it.addr         = base_addr;
+it.trans        = T_NONSEQ;
+it.burst        = burst_type;
+it.size         = SZ_WORD;
+it.lock         = 1'b1;
+it.busreq       = 1'b1;
+it.num_beats    = N;
+it.abort_aware  = abort_aware;
+it.max_attempts = max_attempts;
+it.beats_wr     = {};
+if (user_data.size() == N) begin
+it.beats_wr = user_data;
+end else begin
+for (int i = 0; i < N; i++) begin
+case (pattern)
+PAT_DEAD  : it.beats_wr.push_back(32'hDEAD_BE00 | i);
+PAT_INDEX : it.beats_wr.push_back(32'hAAAA_0000 | i);
+default   : it.beats_wr.push_back($urandom());
+endcase
+end
+end
+it.wdata    = it.beats_wr[0];
+it.exp_resp = R_OKAY;
+finish_item(it);
+resp = it.resp;
+`uvm_info("SEQ_LOCKWR",
+$sformatf("locked burst done base=0x%08h burst=%0d N=%0d resp=%s",
+base_addr, burst_type, N, ahb_seq_item::resp_name(resp)),
+UVM_LOW)
+endtask
+endclass : ahb_lock_write_burst_seq
+class ahb_l3_locked_burst_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_locked_burst_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] m1_burst_addr  = 32'h0000_0150;
+logic [31:0] m2_addr        = 32'h4000_0150;
+logic [31:0] m2_data        = 32'hB2CC_0055;
+logic [31:0] m1_burst_addr2 = 32'h0000_0160;
+bit          do_split_phase = 1'b1;
+function new(string name = "ahb_l3_locked_burst_vseq"); super.new(name); endfunction
+function logic [31:0] exp_beat(burst_pat_e pat, int i);
+case (pat)
+PAT_DEAD : return 32'hDEAD_BE00 | i;
+default  : return 32'hAAAA_0000 | i;
+endcase
+endfunction
+task burst_wr_rd_locked(logic [31:0] baddr, burst_pat_e pat, string tag);
+ahb_lock_write_burst_seq lb;
+ahb_read_burst_seq       rb;
+lb = ahb_lock_write_burst_seq::type_id::create({"lb_", tag});
+lb.base_addr  = baddr;
+lb.burst_type = B_INCR4;
+lb.pattern    = pat;
+lb.start(p_sequencer.m1_seqr_h);
+if (lb.resp !== R_OKAY)
+`uvm_error("L3_LOCKB",
+$sformatf("%s locked burst beat0 resp=%s != OKAY (lock loi?)",
+tag, ahb_seq_item::resp_name(lb.resp)))
+rb = ahb_read_burst_seq::type_id::create({"rb_", tag});
+rb.base_addr  = baddr;
+rb.burst_type = B_INCR4;
+rb.start(p_sequencer.m1_seqr_h);
+for (int i = 0; i < 4; i++)
+if (rb.rdata_out[i] !== exp_beat(pat, i))
+`uvm_error("L3_LOCKB",
+$sformatf("%s beat %0d readback FAIL exp=0x%08h got=0x%08h",
+tag, i, exp_beat(pat, i), rb.rdata_out[i]))
+endtask
+task body();
+`uvm_info("L3_LOCKB",
+"T3.5: M1 locked INCR4 + M2 xin bus -> M2 bi chan toi khi HLOCK nha",
+UVM_LOW)
+fork
+begin : m1_lock_thr
+ahb_lock_write_burst_seq lbA;
+lbA = ahb_lock_write_burst_seq::type_id::create("lbA");
+lbA.base_addr  = m1_burst_addr;
+lbA.burst_type = B_INCR4;
+lbA.pattern    = PAT_INDEX;
+lbA.start(p_sequencer.m1_seqr_h);
+if (lbA.resp !== R_OKAY)
+`uvm_error("L3_LOCKB",
+$sformatf("PhaA M1 locked burst resp=%s != OKAY",
+ahb_seq_item::resp_name(lbA.resp)))
+end
+begin : m2_thr
+ahb_write_single_seq w2;
+ahb_read_single_seq  r2;
+w2 = ahb_write_single_seq::type_id::create("w2");
+w2.addr = m2_addr; w2.wdata = m2_data;
+w2.start(p_sequencer.m2_seqr_h);
+if (w2.resp !== R_OKAY)
+`uvm_error("L3_LOCKB",
+$sformatf("PhaA M2 write (sau lock) resp=%s != OKAY",
+ahb_seq_item::resp_name(w2.resp)))
+r2 = ahb_read_single_seq::type_id::create("r2");
+r2.addr = m2_addr;
+r2.start(p_sequencer.m2_seqr_h);
+if (r2.rdata !== m2_data)
+`uvm_error("L3_LOCKB",
+$sformatf("PhaA M2 readback FAIL exp=0x%08h got=0x%08h",
+m2_data, r2.rdata))
+end
+join
+begin
+ahb_read_burst_seq rbA;
+rbA = ahb_read_burst_seq::type_id::create("rbA");
+rbA.base_addr  = m1_burst_addr;
+rbA.burst_type = B_INCR4;
+rbA.start(p_sequencer.m1_seqr_h);
+for (int i = 0; i < 4; i++)
+if (rbA.rdata_out[i] !== exp_beat(PAT_INDEX, i))
+`uvm_error("L3_LOCKB",
+$sformatf("PhaA M1 burst beat %0d readback FAIL exp=0x%08h got=0x%08h",
+i, exp_beat(PAT_INDEX, i), rbA.rdata_out[i]))
+end
+`uvm_info("L3_LOCKB", "PhaA OK: burst M1 nguyen ven, M2 chi lay bus sau lock",
+UVM_LOW)
+if (do_split_phase) begin
+fork
+begin : force_thr
+ahb_force_seq fseq;
+fseq = ahb_force_seq::type_id::create("fseqB");
+fseq.slave_id   = 1;
+fseq.op_split   = 1'b1;
+fseq.op_retry   = 1'b0;
+fseq.beat_index = 2;
+fseq.num_forces = 1;
+fseq.start(p_sequencer.slv_rsp_seqr_h);
+end
+begin : m1_lockB_thr
+burst_wr_rd_locked(m1_burst_addr2, PAT_DEAD, "B");
+end
+join
+`uvm_info("L3_LOCKB",
+"PhaB OK: SPLIT bi suppress duoi HLOCK, burst hoan tat OKAY (HLOCK>SPLIT)",
+UVM_LOW)
+end
+endtask
+endclass : ahb_l3_locked_burst_vseq
+class ahb_l3_burst_active_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_burst_active_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] m1_addr = 32'h0000_0170;
+logic [31:0] m2_addr = 32'h4000_0170;
+logic [31:0] m2_data = 32'hB26A_0006;
+function new(string name = "ahb_l3_burst_active_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_BACTIVE",
+"T3.6: M1 INCR4 (unlocked) khong bi cat giua chung du M2 xin bus", UVM_LOW)
+fork
+begin : m1_burst_thr
+ahb_write_burst_seq wb;
+wb = ahb_write_burst_seq::type_id::create("wb");
+wb.base_addr  = m1_addr;
+wb.burst_type = B_INCR4;
+wb.pattern    = PAT_INDEX;
+wb.start(p_sequencer.m1_seqr_h);
+end
+begin : m2_thr
+ahb_write_single_seq w2;
+ahb_read_single_seq  r2;
+w2 = ahb_write_single_seq::type_id::create("w2");
+w2.addr = m2_addr; w2.wdata = m2_data;
+w2.start(p_sequencer.m2_seqr_h);
+if (w2.resp !== R_OKAY)
+`uvm_error("L3_BACTIVE",
+$sformatf("M2 write (sau burst) resp=%s != OKAY",
+ahb_seq_item::resp_name(w2.resp)))
+r2 = ahb_read_single_seq::type_id::create("r2");
+r2.addr = m2_addr;
+r2.start(p_sequencer.m2_seqr_h);
+if (r2.rdata !== m2_data)
+`uvm_error("L3_BACTIVE",
+$sformatf("M2 readback FAIL exp=0x%08h got=0x%08h",
+m2_data, r2.rdata))
+end
+join
+begin
+ahb_read_burst_seq rb;
+rb = ahb_read_burst_seq::type_id::create("rb");
+rb.base_addr  = m1_addr;
+rb.burst_type = B_INCR4;
+rb.start(p_sequencer.m1_seqr_h);
+for (int i = 0; i < 4; i++)
+if (rb.rdata_out[i] !== (32'hAAAA_0000 | i))
+`uvm_error("L3_BACTIVE",
+$sformatf("M1 burst beat %0d readback FAIL exp=0x%08h got=0x%08h (burst bi cat?)",
+i, 32'hAAAA_0000 | i, rb.rdata_out[i]))
+end
+`uvm_info("L3_BACTIVE",
+"burst M1 nguyen 4/4 beat, M2 nhan bus dung sau beat cuoi", UVM_LOW)
+endtask
+endclass : ahb_l3_burst_active_vseq
+class ahb_l3_mux_pipeline_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_mux_pipeline_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] s1_addr = 32'h0000_0180;
+logic [31:0] s2_addr = 32'h4000_0180;
+logic [31:0] d1      = 32'hA1B1_0180;
+logic [31:0] d2      = 32'hB2B2_0180;
+function new(string name = "ahb_l3_mux_pipeline_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_MUXPIPE",
+"T3.11: kiem addr/write/read mux chuyen dung nhip khi HMASTER 0->1", UVM_LOW)
+fork
+begin : m1_wr
+ahb_write_single_seq w1;
+w1 = ahb_write_single_seq::type_id::create("w1");
+w1.addr = s1_addr; w1.wdata = d1;
+w1.start(p_sequencer.m1_seqr_h);
+if (w1.resp !== R_OKAY)
+`uvm_error("L3_MUXPIPE", "M1 write resp != OKAY")
+end
+begin : m2_wr
+ahb_write_single_seq w2;
+w2 = ahb_write_single_seq::type_id::create("w2");
+w2.addr = s2_addr; w2.wdata = d2;
+w2.start(p_sequencer.m2_seqr_h);
+if (w2.resp !== R_OKAY)
+`uvm_error("L3_MUXPIPE", "M2 write resp != OKAY")
+end
+join
+begin
+ahb_read_single_seq c1, c2;
+c1 = ahb_read_single_seq::type_id::create("c1");
+c1.addr = s1_addr; c1.start(p_sequencer.m1_seqr_h);
+if (c1.rdata !== d1)
+`uvm_error("L3_MUXPIPE",
+$sformatf("write_data_mux SAI: S1 exp=0x%08h got=0x%08h (bi HWDATA_M2 de len?)",
+d1, c1.rdata))
+c2 = ahb_read_single_seq::type_id::create("c2");
+c2.addr = s2_addr; c2.start(p_sequencer.m2_seqr_h);
+if (c2.rdata !== d2)
+`uvm_error("L3_MUXPIPE",
+$sformatf("write_data_mux SAI: S2 exp=0x%08h got=0x%08h",
+d2, c2.rdata))
+end
+fork
+begin : m1_rd
+ahb_read_single_seq r1;
+r1 = ahb_read_single_seq::type_id::create("r1");
+r1.addr = s1_addr; r1.start(p_sequencer.m1_seqr_h);
+if (r1.rdata !== d1)
+`uvm_error("L3_MUXPIPE",
+$sformatf("read_data_mux SWAP/SKEW: M1 doc S1 exp=0x%08h got=0x%08h",
+d1, r1.rdata))
+end
+begin : m2_rd
+ahb_read_single_seq r2;
+r2 = ahb_read_single_seq::type_id::create("r2");
+r2.addr = s2_addr; r2.start(p_sequencer.m2_seqr_h);
+if (r2.rdata !== d2)
+`uvm_error("L3_MUXPIPE",
+$sformatf("read_data_mux SWAP/SKEW: M2 doc S2 exp=0x%08h got=0x%08h",
+d2, r2.rdata))
+end
+join
+`uvm_info("L3_MUXPIPE",
+"3 duong mux chuyen dung: khong tron write, khong swap read, dinh tuyen dung",
+UVM_LOW)
+endtask
+endclass : ahb_l3_mux_pipeline_vseq
+class ahb_l3_data_isolation_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_data_isolation_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] a_s1 = 32'h0000_0080;  logic [31:0] a_d1 = 32'hAAAA_8888;
+logic [31:0] a_s2 = 32'h4000_0080;  logic [31:0] a_d2 = 32'hBBBB_9999;
+logic [31:0] b_a1 = 32'h0000_0090;  logic [31:0] b_d1 = 32'h1111_AAAA;
+logic [31:0] b_a2 = 32'h0000_0094;  logic [31:0] b_d2 = 32'h2222_BBBB;
+function new(string name = "ahb_l3_data_isolation_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_ISO", "T3.12: cach ly du lieu 2 master (khac slave + cung slave)",
+UVM_LOW)
+fork
+begin : a_m1
+ahb_write_single_seq w;
+w = ahb_write_single_seq::type_id::create("aw1");
+w.addr = a_s1; w.wdata = a_d1; w.start(p_sequencer.m1_seqr_h);
+if (w.resp !== R_OKAY) `uvm_error("L3_ISO", "PhaA M1 write != OKAY")
+end
+begin : a_m2
+ahb_write_single_seq w;
+w = ahb_write_single_seq::type_id::create("aw2");
+w.addr = a_s2; w.wdata = a_d2; w.start(p_sequencer.m2_seqr_h);
+if (w.resp !== R_OKAY) `uvm_error("L3_ISO", "PhaA M2 write != OKAY")
+end
+join
+begin
+ahb_read_single_seq r1, r2;
+r1 = ahb_read_single_seq::type_id::create("ar1");
+r1.addr = a_s1; r1.start(p_sequencer.m1_seqr_h);
+if (r1.rdata !== a_d1)
+`uvm_error("L3_ISO",
+$sformatf("PhaA S1 nhiem/loi exp=0x%08h got=0x%08h", a_d1, r1.rdata))
+r2 = ahb_read_single_seq::type_id::create("ar2");
+r2.addr = a_s2; r2.start(p_sequencer.m2_seqr_h);
+if (r2.rdata !== a_d2)
+`uvm_error("L3_ISO",
+$sformatf("PhaA S2 nhiem/loi exp=0x%08h got=0x%08h", a_d2, r2.rdata))
+end
+`uvm_info("L3_ISO", "PhaA OK: S1=du lieu M1, S2=du lieu M2 (khong nhiem cheo)",
+UVM_LOW)
+fork
+begin : b_m1
+ahb_write_single_seq w;
+w = ahb_write_single_seq::type_id::create("bw1");
+w.addr = b_a1; w.wdata = b_d1; w.start(p_sequencer.m1_seqr_h);
+if (w.resp !== R_OKAY) `uvm_error("L3_ISO", "PhaB M1 write != OKAY")
+end
+begin : b_m2
+ahb_write_single_seq w;
+w = ahb_write_single_seq::type_id::create("bw2");
+w.addr = b_a2; w.wdata = b_d2; w.start(p_sequencer.m2_seqr_h);
+if (w.resp !== R_OKAY) `uvm_error("L3_ISO", "PhaB M2 write != OKAY")
+end
+join
+begin
+ahb_read_single_seq rx1, rx2;
+rx1 = ahb_read_single_seq::type_id::create("brx1");
+rx1.addr = b_a2; rx1.start(p_sequencer.m1_seqr_h);
+if (rx1.rdata !== b_d2)
+`uvm_error("L3_ISO",
+$sformatf("PhaB M1 doc 0x94 exp=0x%08h (M2) got=0x%08h", b_d2, rx1.rdata))
+rx2 = ahb_read_single_seq::type_id::create("brx2");
+rx2.addr = b_a1; rx2.start(p_sequencer.m2_seqr_h);
+if (rx2.rdata !== b_d1)
+`uvm_error("L3_ISO",
+$sformatf("PhaB M2 doc 0x90 exp=0x%08h (M1) got=0x%08h", b_d1, rx2.rdata))
+end
+`uvm_info("L3_ISO",
+"PhaB OK: 1 slave giu ca 2 word, doc cheo dung -> bo nho chia se toan ven",
+UVM_LOW)
+endtask
+endclass : ahb_l3_data_isolation_vseq
+class ahb_l3_alt_stress_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_alt_stress_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+int unsigned rounds  = 8;
+logic [31:0] s1_base = 32'h0000_0100;
+logic [31:0] s2_base = 32'h4000_0100;
+function new(string name = "ahb_l3_alt_stress_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_STRESS",
+$sformatf("T3.15: %0d vong M1<->M2 xen ke (fork song song)", rounds), UVM_LOW)
+fork
+begin : m1_loop
+for (int i = 0; i < rounds; i++) begin
+ahb_write_single_seq w;
+w = ahb_write_single_seq::type_id::create($sformatf("m1w%0d", i));
+w.addr  = s1_base + 4*i;
+w.wdata = 32'hA000_0000 + i;
+w.start(p_sequencer.m1_seqr_h);
+if (w.resp !== R_OKAY)
+`uvm_error("L3_STRESS",
+$sformatf("M1 round %0d write resp=%s != OKAY",
+i, ahb_seq_item::resp_name(w.resp)))
+end
+end
+begin : m2_loop
+for (int i = 0; i < rounds; i++) begin
+ahb_write_single_seq w;
+w = ahb_write_single_seq::type_id::create($sformatf("m2w%0d", i));
+w.addr  = s2_base + 4*i;
+w.wdata = 32'hB000_0000 + i;
+w.start(p_sequencer.m2_seqr_h);
+if (w.resp !== R_OKAY)
+`uvm_error("L3_STRESS",
+$sformatf("M2 round %0d write resp=%s != OKAY",
+i, ahb_seq_item::resp_name(w.resp)))
+end
+end
+join
+for (int i = 0; i < rounds; i++) begin
+ahb_read_single_seq r;
+r = ahb_read_single_seq::type_id::create($sformatf("m1r%0d", i));
+r.addr = s1_base + 4*i;
+r.start(p_sequencer.m1_seqr_h);
+if (r.rdata !== (32'hA000_0000 + i))
+`uvm_error("L3_STRESS",
+$sformatf("M1 readback %0d FAIL exp=0x%08h got=0x%08h",
+i, 32'hA000_0000 + i, r.rdata))
+end
+for (int i = 0; i < rounds; i++) begin
+ahb_read_single_seq r;
+r = ahb_read_single_seq::type_id::create($sformatf("m2r%0d", i));
+r.addr = s2_base + 4*i;
+r.start(p_sequencer.m2_seqr_h);
+if (r.rdata !== (32'hB000_0000 + i))
+`uvm_error("L3_STRESS",
+$sformatf("M2 readback %0d FAIL exp=0x%08h got=0x%08h",
+i, 32'hB000_0000 + i, r.rdata))
+end
+`uvm_info("L3_STRESS", "16/16 readback khop, khong ghost transfer", UVM_LOW)
+endtask
+endclass : ahb_l3_alt_stress_vseq
+class ahb_l3_split_switch_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_split_switch_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] m1_raddr = 32'h0000_0000;
+logic [31:0] m1_rexp  = 32'h0000_000A;
+logic [31:0] m2_waddr = 32'h4000_00A0;
+logic [31:0] m2_wdata = 32'hB208_00A0;
+function new(string name = "ahb_l3_split_switch_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_SPLSW",
+"T3.8: M1 doc S1 bi SPLIT -> nhuong M2 -> unmask -> M1 retry OK", UVM_LOW)
+fork
+begin : force_thr
+ahb_force_seq fseq;
+fseq = ahb_force_seq::type_id::create("fseq_s1");
+fseq.slave_id   = 1;
+fseq.op_split   = 1'b1;
+fseq.op_retry   = 1'b0;
+fseq.beat_index = 0;
+fseq.num_forces = 1;
+fseq.start(p_sequencer.slv_rsp_seqr_h);
+end
+begin : m1_thr
+ahb_read_single_seq rseq;
+rseq = ahb_read_single_seq::type_id::create("m1_rd");
+rseq.addr         = m1_raddr;
+rseq.max_attempts = 4;
+rseq.start(p_sequencer.m1_seqr_h);
+if (rseq.resp !== R_OKAY)
+`uvm_error("L3_SPLSW",
+$sformatf("M1 khong hoi phuc OKAY sau SPLIT (resp=%s)",
+ahb_seq_item::resp_name(rseq.resp)))
+else if (rseq.rdata !== m1_rexp)
+`uvm_error("L3_SPLSW",
+$sformatf("M1 recovered nhung data sai exp=0x%08h got=0x%08h",
+m1_rexp, rseq.rdata))
+end
+begin : m2_thr
+ahb_write_single_seq wseq;
+wseq = ahb_write_single_seq::type_id::create("m2_wr");
+wseq.addr = m2_waddr; wseq.wdata = m2_wdata;
+wseq.start(p_sequencer.m2_seqr_h);
+if (wseq.resp !== R_OKAY)
+`uvm_error("L3_SPLSW",
+$sformatf("M2 ghi S2 khi M1 bi mask khong OKAY (resp=%s)",
+ahb_seq_item::resp_name(wseq.resp)))
+end
+join
+begin
+ahb_read_single_seq chk;
+chk = ahb_read_single_seq::type_id::create("m2_chk");
+chk.addr = m2_waddr; chk.start(p_sequencer.m2_seqr_h);
+if (chk.rdata !== m2_wdata)
+`uvm_error("L3_SPLSW",
+$sformatf("M2 readback sai exp=0x%08h got=0x%08h", m2_wdata, chk.rdata))
+end
+`uvm_info("L3_SPLSW", "OK: M1 mask->unmask->retry OK, M2 chay xen vao OKAY", UVM_LOW)
+endtask
+endclass : ahb_l3_split_switch_vseq
+class ahb_l3_split_or_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_split_or_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] s1_addr = 32'h0000_0000;  logic [31:0] s1_exp = 32'h0000_000A;
+logic [31:0] s2_addr = 32'h4000_0000;  logic [31:0] s2_exp = 32'h0000_0014;
+function new(string name = "ahb_l3_split_or_vseq"); super.new(name); endfunction
+task split_read(int mst, int sid, logic [31:0] addr, logic [31:0] exp, string tag);
+ahb_force_seq       fseq;
+ahb_read_single_seq rseq;
+fseq = ahb_force_seq::type_id::create({"f_", tag});
+fseq.slave_id = sid; fseq.op_split = 1'b1; fseq.op_retry = 1'b0;
+fseq.beat_index = 0; fseq.num_forces = 1;
+fork
+fseq.start(p_sequencer.slv_rsp_seqr_h);
+begin
+rseq = ahb_read_single_seq::type_id::create({"r_", tag});
+rseq.addr = addr; rseq.max_attempts = 4;
+if (mst == 1) rseq.start(p_sequencer.m1_seqr_h);
+else          rseq.start(p_sequencer.m2_seqr_h);
+if (rseq.resp !== R_OKAY)
+`uvm_error("L3_SPLOR",
+$sformatf("%s khong hoi phuc OKAY (resp=%s)",
+tag, ahb_seq_item::resp_name(rseq.resp)))
+else if (rseq.rdata !== exp)
+`uvm_error("L3_SPLOR",
+$sformatf("%s data sai exp=0x%08h got=0x%08h", tag, exp, rseq.rdata))
+end
+join
+endtask
+task body();
+`uvm_info("L3_SPLOR", "T3.9: kiem HSPLIT OR + anh xa bit0=M1, bit1=M2", UVM_LOW)
+split_read(1, 1, s1_addr, s1_exp, "M1_S1");
+split_read(2, 2, s2_addr, s2_exp, "M2_S2");
+endtask
+endclass : ahb_l3_split_or_vseq
+class ahb_l3_both_masked_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_both_masked_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] s1_addr = 32'h0000_0000;  logic [31:0] s1_exp = 32'h0000_000A;
+logic [31:0] s2_addr = 32'h4000_0000;  logic [31:0] s2_exp = 32'h0000_0014;
+function new(string name = "ahb_l3_both_masked_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_BOTHM",
+"T3.10: M1 SPLIT@S1 + M2 SPLIT@S2 -> ca hai mask->unmask->OKAY, khong deadlock",
+UVM_LOW)
+fork
+begin : f_s1
+ahb_force_seq f1;
+f1 = ahb_force_seq::type_id::create("f_s1");
+f1.slave_id = 1; f1.op_split = 1'b1; f1.op_retry = 1'b0;
+f1.beat_index = 0; f1.num_forces = 1;
+f1.start(p_sequencer.slv_rsp_seqr_h);
+end
+begin : f_s2
+ahb_force_seq f2;
+f2 = ahb_force_seq::type_id::create("f_s2");
+f2.slave_id = 2; f2.op_split = 1'b1; f2.op_retry = 1'b0;
+f2.beat_index = 0; f2.num_forces = 1;
+f2.start(p_sequencer.slv_rsp_seqr_h);
+end
+begin : m1_thr
+ahb_read_single_seq r1;
+r1 = ahb_read_single_seq::type_id::create("m1_rd");
+r1.addr = s1_addr; r1.max_attempts = 5;
+r1.start(p_sequencer.m1_seqr_h);
+if (r1.resp !== R_OKAY || r1.rdata !== s1_exp)
+`uvm_error("L3_BOTHM",
+$sformatf("M1 hoi phuc loi resp=%s data=0x%08h (exp 0x%08h)",
+ahb_seq_item::resp_name(r1.resp), r1.rdata, s1_exp))
+end
+begin : m2_thr
+ahb_read_single_seq r2;
+r2 = ahb_read_single_seq::type_id::create("m2_rd");
+r2.addr = s2_addr; r2.max_attempts = 5;
+r2.start(p_sequencer.m2_seqr_h);
+if (r2.resp !== R_OKAY || r2.rdata !== s2_exp)
+`uvm_error("L3_BOTHM",
+$sformatf("M2 hoi phuc loi resp=%s data=0x%08h (exp 0x%08h)",
+ahb_seq_item::resp_name(r2.resp), r2.rdata, s2_exp))
+end
+join
+`uvm_info("L3_BOTHM", "OK: ca hai master mask->unmask->OKAY, khong deadlock", UVM_LOW)
+endtask
+endclass : ahb_l3_both_masked_vseq
+class ahb_l3_lock_over_split_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_lock_over_split_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] m1_baddr = 32'h0000_01A0;
+logic [31:0] m2_waddr = 32'h4000_01A0;
+logic [31:0] m2_wdata = 32'hB214_01A0;
+function new(string name = "ahb_l3_lock_over_split_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_LKSPL",
+"T3.14: M1 locked + SPLIT bi suppress -> M1 giu bus, M2 cho lock nha", UVM_LOW)
+fork
+begin : force_thr
+ahb_force_seq fseq;
+fseq = ahb_force_seq::type_id::create("f_s1");
+fseq.slave_id = 1; fseq.op_split = 1'b1; fseq.op_retry = 1'b0;
+fseq.beat_index = 2; fseq.num_forces = 1;
+fseq.start(p_sequencer.slv_rsp_seqr_h);
+end
+begin : m1_lock_thr
+ahb_lock_write_burst_seq lb;
+lb = ahb_lock_write_burst_seq::type_id::create("m1_lb");
+lb.base_addr = m1_baddr; lb.burst_type = B_INCR4; lb.pattern = PAT_INDEX;
+lb.start(p_sequencer.m1_seqr_h);
+if (lb.resp !== R_OKAY)
+`uvm_error("L3_LKSPL",
+$sformatf("M1 locked burst KHONG OKAY (bi SPLIT?) resp=%s",
+ahb_seq_item::resp_name(lb.resp)))
+end
+begin : m2_thr
+ahb_write_single_seq w2;
+w2 = ahb_write_single_seq::type_id::create("m2_wr");
+w2.addr = m2_waddr; w2.wdata = m2_wdata;
+w2.start(p_sequencer.m2_seqr_h);
+if (w2.resp !== R_OKAY)
+`uvm_error("L3_LKSPL",
+$sformatf("M2 ghi (sau lock) KHONG OKAY resp=%s",
+ahb_seq_item::resp_name(w2.resp)))
+end
+join
+begin
+ahb_read_burst_seq  rb;
+ahb_read_single_seq c2;
+rb = ahb_read_burst_seq::type_id::create("m1_rb");
+rb.base_addr = m1_baddr; rb.burst_type = B_INCR4;
+rb.start(p_sequencer.m1_seqr_h);
+for (int i = 0; i < 4; i++)
+if (rb.rdata_out[i] !== (32'hAAAA_0000 | i))
+`uvm_error("L3_LKSPL",
+$sformatf("M1 locked burst beat %0d sai exp=0x%08h got=0x%08h",
+i, 32'hAAAA_0000 | i, rb.rdata_out[i]))
+c2 = ahb_read_single_seq::type_id::create("m2_chk");
+c2.addr = m2_waddr; c2.start(p_sequencer.m2_seqr_h);
+if (c2.rdata !== m2_wdata)
+`uvm_error("L3_LKSPL",
+$sformatf("M2 readback sai exp=0x%08h got=0x%08h", m2_wdata, c2.rdata))
+end
+`uvm_info("L3_LKSPL", "OK: locked master giu bus qua SPLIT, M2 cho lock nha", UVM_LOW)
+endtask
+endclass : ahb_l3_lock_over_split_vseq
+class ahb_l3_locked_split_hold_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_locked_split_hold_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] m1_baddr = 32'h0000_01B0;
+function new(string name = "ahb_l3_locked_split_hold_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_LKHOLD",
+"T3.16: 1 master locked + SPLIT -> arbiter giu GNT_M1 (khong IDLE)", UVM_LOW)
+fork
+begin : force_thr
+ahb_force_seq fseq;
+fseq = ahb_force_seq::type_id::create("f_s1");
+fseq.slave_id = 1; fseq.op_split = 1'b1; fseq.op_retry = 1'b0;
+fseq.beat_index = 2; fseq.num_forces = 1;
+fseq.start(p_sequencer.slv_rsp_seqr_h);
+end
+begin : m1_lock_thr
+ahb_lock_write_burst_seq lb;
+lb = ahb_lock_write_burst_seq::type_id::create("m1_lb");
+lb.base_addr = m1_baddr; lb.burst_type = B_INCR4; lb.pattern = PAT_INDEX;
+lb.start(p_sequencer.mst_seqr());
+if (lb.resp !== R_OKAY)
+`uvm_error("L3_LKHOLD",
+$sformatf("M1 locked burst KHONG OKAY (bi SPLIT/IDLE?) resp=%s",
+ahb_seq_item::resp_name(lb.resp)))
+end
+join
+begin
+ahb_read_burst_seq rb;
+rb = ahb_read_burst_seq::type_id::create("m1_rb");
+rb.base_addr = m1_baddr; rb.burst_type = B_INCR4;
+rb.start(p_sequencer.mst_seqr());
+for (int i = 0; i < 4; i++)
+if (rb.rdata_out[i] !== (32'hAAAA_0000 | i))
+`uvm_error("L3_LKHOLD",
+$sformatf("locked burst beat %0d sai (mat transfer?) exp=0x%08h got=0x%08h",
+i, 32'hAAAA_0000 | i, rb.rdata_out[i]))
+end
+`uvm_info("L3_LKHOLD", "OK: arbiter giu GNT_M1, locked burst nguyen ven, khong deadlock",
+UVM_LOW)
+endtask
+endclass : ahb_l3_locked_split_hold_vseq
+class ahb_l3_retry_rr_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_retry_rr_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] m1_waddr = 32'h0000_01C0;  logic [31:0] m1_wdata = 32'hA117_01C0;
+logic [31:0] m2_waddr = 32'h4000_01C0;  logic [31:0] m2_wdata = 32'hB217_01C0;
+function new(string name = "ahb_l3_retry_rr_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_RTRR",
+"T3.17: M1 bi RETRY (khong mask) + M2 xin bus -> round-robin xen ke", UVM_LOW)
+fork
+begin : force_thr
+ahb_force_seq fseq;
+fseq = ahb_force_seq::type_id::create("f_s1");
+fseq.slave_id = 1; fseq.op_split = 1'b0; fseq.op_retry = 1'b1;
+fseq.beat_index = 0; fseq.num_forces = 1;
+fseq.start(p_sequencer.slv_rsp_seqr_h);
+end
+begin : m1_thr
+ahb_write_single_seq w1;
+w1 = ahb_write_single_seq::type_id::create("m1_wr");
+w1.addr = m1_waddr; w1.wdata = m1_wdata; w1.max_attempts = 4;
+w1.start(p_sequencer.m1_seqr_h);
+if (w1.resp !== R_OKAY)
+`uvm_error("L3_RTRR",
+$sformatf("M1 khong hoan tat sau RETRY resp=%s",
+ahb_seq_item::resp_name(w1.resp)))
+end
+begin : m2_thr
+ahb_write_single_seq w2;
+w2 = ahb_write_single_seq::type_id::create("m2_wr");
+w2.addr = m2_waddr; w2.wdata = m2_wdata;
+w2.start(p_sequencer.m2_seqr_h);
+if (w2.resp !== R_OKAY)
+`uvm_error("L3_RTRR",
+$sformatf("M2 ghi khong OKAY resp=%s",
+ahb_seq_item::resp_name(w2.resp)))
+end
+join
+begin
+ahb_read_single_seq c1, c2;
+c1 = ahb_read_single_seq::type_id::create("m1_chk");
+c1.addr = m1_waddr; c1.start(p_sequencer.m1_seqr_h);
+if (c1.rdata !== m1_wdata)
+`uvm_error("L3_RTRR",
+$sformatf("M1 readback sai exp=0x%08h got=0x%08h", m1_wdata, c1.rdata))
+c2 = ahb_read_single_seq::type_id::create("m2_chk");
+c2.addr = m2_waddr; c2.start(p_sequencer.m2_seqr_h);
+if (c2.rdata !== m2_wdata)
+`uvm_error("L3_RTRR",
+$sformatf("M2 readback sai exp=0x%08h got=0x%08h", m2_wdata, c2.rdata))
+end
+`uvm_info("L3_RTRR", "OK: RETRY khong mask, M2 xen ke, M1 hoan tat, du lieu dung",
+UVM_LOW)
+endtask
+endclass : ahb_l3_retry_rr_vseq
+class ahb_l3_rvs_retry_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_rvs_retry_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] a_waddr = 32'h0000_01D0;  logic [31:0] a_wdata = 32'hA118_01D0;
+function new(string name = "ahb_l3_rvs_retry_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_RVS", "T3.18 PhaA: M1 ghi S1 + RETRY (ky vong KHONG mask)", UVM_LOW)
+fork
+begin : a_force
+ahb_force_seq f;
+f = ahb_force_seq::type_id::create("fa");
+f.slave_id = 1; f.op_split = 1'b0; f.op_retry = 1'b1;
+f.beat_index = 0; f.num_forces = 1;
+f.start(p_sequencer.slv_rsp_seqr_h);
+end
+begin : a_m1
+ahb_write_single_seq w;
+w = ahb_write_single_seq::type_id::create("a_wr");
+w.addr = a_waddr; w.wdata = a_wdata; w.max_attempts = 4;
+w.start(p_sequencer.mst_seqr());
+if (w.resp !== R_OKAY)
+`uvm_error("L3_RVS",
+$sformatf("PhaA (RETRY) M1 khong OKAY resp=%s",
+ahb_seq_item::resp_name(w.resp)))
+end
+join
+begin
+ahb_read_single_seq c;
+c = ahb_read_single_seq::type_id::create("a_chk");
+c.addr = a_waddr; c.start(p_sequencer.mst_seqr());
+if (c.rdata !== a_wdata)
+`uvm_error("L3_RVS",
+$sformatf("PhaA readback sai exp=0x%08h got=0x%08h", a_wdata, c.rdata))
+end
+endtask
+endclass : ahb_l3_rvs_retry_vseq
+class ahb_l3_rvs_split_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_rvs_split_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] b_raddr = 32'h0000_0000;  logic [31:0] b_rexp = 32'h0000_000A;
+function new(string name = "ahb_l3_rvs_split_vseq"); super.new(name); endfunction
+task body();
+`uvm_info("L3_RVS", "T3.18 PhaB: M1 doc S1 + SPLIT (ky vong CO mask+unmask)", UVM_LOW)
+fork
+begin : b_force
+ahb_force_seq f;
+f = ahb_force_seq::type_id::create("fb");
+f.slave_id = 1; f.op_split = 1'b1; f.op_retry = 1'b0;
+f.beat_index = 0; f.num_forces = 1;
+f.start(p_sequencer.slv_rsp_seqr_h);
+end
+begin : b_m1
+ahb_read_single_seq r;
+r = ahb_read_single_seq::type_id::create("b_rd");
+r.addr = b_raddr; r.max_attempts = 4;
+r.start(p_sequencer.mst_seqr());
+if (r.resp !== R_OKAY)
+`uvm_error("L3_RVS",
+$sformatf("PhaB (SPLIT) M1 khong hoi phuc OKAY resp=%s",
+ahb_seq_item::resp_name(r.resp)))
+else if (r.rdata !== b_rexp)
+`uvm_error("L3_RVS",
+$sformatf("PhaB data sai exp=0x%08h got=0x%08h", b_rexp, r.rdata))
+end
+join
+endtask
+endclass : ahb_l3_rvs_split_vseq
+class ahb_chain_pipelined_wr_seq extends ahb_base_seq;
+rand logic [31:0]  s1_addr;
+rand logic [31:0]  s2_addr;
+rand logic [31:0]  s3_addr;
+rand logic [31:0]  default_addr;
+logic [31:0]       wdata[$];
+logic [1:0]  beats_resp[$];
+constraint c_align {
+s1_addr[1:0]       == 2'b00;
+s2_addr[1:0]       == 2'b00;
+s3_addr[1:0]       == 2'b00;
+default_addr[1:0]  == 2'b00;
+}
+constraint c_region_dflt {
+soft s1_addr[31:30]      == 2'b00;
+soft s2_addr[31:30]      == 2'b01;
+soft s3_addr[31:30]      == 2'b10;
+soft default_addr[31:30]== 2'b11;
+}
+`uvm_object_utils(ahb_chain_pipelined_wr_seq)
+function new(string name = "ahb_chain_pipelined_wr_seq"); super.new(name); endfunction
+task body();
+ahb_seq_item it;
+it = ahb_seq_item::type_id::create("chain_wr");
+start_item(it);
+it.dir             = AHB_WRITE;
+it.chain_pipelined = 1'b1;
+it.chain_addr      = {s1_addr, s2_addr, s3_addr, default_addr};
+if (wdata.size() == 4)
+it.beats_wr = wdata;
+else
+it.beats_wr = '{32'hBEEF_0001, 32'hBEEF_0002, 32'hBEEF_0003, 32'hBEEF_0004};
+it.addr  = s1_addr;
+it.wdata = it.beats_wr[0];
+finish_item(it);
+beats_resp = it.beats_resp;
+`uvm_info("SEQ_CHAINWR",
+$sformatf("chain S1(0x%08h)->S2(0x%08h)->S3(0x%08h)->Default(0x%08h)",
+s1_addr, s2_addr, s3_addr, default_addr), UVM_LOW)
+endtask
+endclass : ahb_chain_pipelined_wr_seq
+class ahb_l3_chain_pipelined_vseq extends uvm_sequence;
+`uvm_object_utils(ahb_l3_chain_pipelined_vseq)
+`uvm_declare_p_sequencer(ahb_virtual_sequencer)
+logic [31:0] s1_addr      = 32'h0000_0300;
+logic [31:0] s2_addr      = 32'h4000_0300;
+logic [31:0] s3_addr      = 32'h8000_0300;
+logic [31:0] default_addr = 32'hC000_0300;
+logic [31:0] wr_data[$]   = '{32'hBEEF_0001, 32'hBEEF_0002, 32'hBEEF_0003, 32'hBEEF_0004};
+function new(string name = "ahb_l3_chain_pipelined_vseq"); super.new(name); endfunction
+task body();
+ahb_chain_pipelined_wr_seq cseq;
+ahb_read_single_seq        r1, r2, r3;
+`uvm_info("L3_CHAIN",
+"Bonus: ghi pipeline lien tuc S1->S2->S3->Default, 0 chu ky idle giua cac beat",
+UVM_LOW)
+cseq = ahb_chain_pipelined_wr_seq::type_id::create("cseq");
+cseq.s1_addr      = s1_addr;
+cseq.s2_addr      = s2_addr;
+cseq.s3_addr      = s3_addr;
+cseq.default_addr = default_addr;
+cseq.wdata        = wr_data;
+cseq.start(p_sequencer.m1_seqr_h);
+if (cseq.beats_resp.size() != 4)
+`uvm_error("L3_CHAIN",
+$sformatf("So beat phan hoi khong dung: got %0d, ky vong 4",
+cseq.beats_resp.size()))
+else begin
+if (cseq.beats_resp[0] !== R_OKAY)
+`uvm_error("L3_CHAIN",
+$sformatf("S1 khong OKAY: %s", ahb_seq_item::resp_name(cseq.beats_resp[0])))
+if (cseq.beats_resp[1] !== R_OKAY)
+`uvm_error("L3_CHAIN",
+$sformatf("S2 khong OKAY: %s", ahb_seq_item::resp_name(cseq.beats_resp[1])))
+if (cseq.beats_resp[2] !== R_OKAY)
+`uvm_error("L3_CHAIN",
+$sformatf("S3 khong OKAY: %s", ahb_seq_item::resp_name(cseq.beats_resp[2])))
+if (cseq.beats_resp[3] !== R_ERROR)
+`uvm_error("L3_CHAIN",
+$sformatf("Default khong ERROR (dung nhu spec) - got %s",
+ahb_seq_item::resp_name(cseq.beats_resp[3])))
+end
+r1 = ahb_read_single_seq::type_id::create("chain_chk_s1");
+r1.addr = s1_addr; r1.start(p_sequencer.m1_seqr_h);
+if (r1.rdata !== wr_data[0])
+`uvm_error("L3_CHAIN",
+$sformatf("S1 readback sai exp=0x%08h got=0x%08h", wr_data[0], r1.rdata))
+r2 = ahb_read_single_seq::type_id::create("chain_chk_s2");
+r2.addr = s2_addr; r2.start(p_sequencer.m1_seqr_h);
+if (r2.rdata !== wr_data[1])
+`uvm_error("L3_CHAIN",
+$sformatf("S2 readback sai exp=0x%08h got=0x%08h", wr_data[1], r2.rdata))
+r3 = ahb_read_single_seq::type_id::create("chain_chk_s3");
+r3.addr = s3_addr; r3.start(p_sequencer.m1_seqr_h);
+if (r3.rdata !== wr_data[2])
+`uvm_error("L3_CHAIN",
+$sformatf("S3 readback sai exp=0x%08h got=0x%08h", wr_data[2], r3.rdata))
+`uvm_info("L3_CHAIN",
+"OK: pipeline S1->S2->S3->Default hoan tat, S1/S2/S3 dung du lieu, Default ERROR dung spec",
+UVM_LOW)
+endtask
+endclass : ahb_l3_chain_pipelined_vseq
+
+class ahb_mid_reset_traffic_vseq extends uvm_sequence;
+    `uvm_object_utils(ahb_mid_reset_traffic_vseq)
+    `uvm_declare_p_sequencer(ahb_virtual_sequencer)
+ 
+    logic [31:0] addr;
+    logic [31:0] wdata;
+    string       tag = "midrst";
+ 
+    function new(string name = "ahb_mid_reset_traffic_vseq");
+        super.new(name);
+    endfunction
+ 
+    task body();
+        ahb_write_single_seq w;
+        ahb_read_single_seq  r;
+ 
+        w = ahb_write_single_seq::type_id::create({"w_", tag});
+        w.addr  = addr;
+        w.wdata = wdata;
+        w.start(p_sequencer.mst_seqr());
+        if (w.resp !== R_OKAY)
+            `uvm_error("MIDRST_SEQ",
+                $sformatf("%s write @0x%08h resp=%s != OKAY",
+                          tag, addr, ahb_seq_item::resp_name(w.resp)))
+ 
+        r = ahb_read_single_seq::type_id::create({"r_", tag});
+        r.addr = addr;
+        r.start(p_sequencer.mst_seqr());
+        if (r.rdata !== wdata)
+            `uvm_error("MIDRST_SEQ",
+                $sformatf("%s readback FAIL @0x%08h exp=0x%08h got=0x%08h",
+                          tag, addr, wdata, r.rdata))
+        else
+            `uvm_info("MIDRST_SEQ",
+                $sformatf("%s WR/RD @0x%08h = 0x%08h OK", tag, addr, wdata),
+                UVM_LOW)
+    endtask
+endclass : ahb_mid_reset_traffic_vseq

@@ -1,0 +1,115 @@
+Questa Altera Starter FPGA Edition-64 vcover 2025.3 Coverage Utility 2025.09 Sep 15 2025
+Start time: 14:29:41 on Jul 13,2026
+vcover report merged_coverage.ucdb -du=AHB_Arbiter -du=ahb_decoder -du=ahb_addr_ctrl_mux -du=ahb_write_data_mux -du=ahb_read_data_mux -du=ahb_resp_mux -du=ahb_ready_mux -du=AHB_Interconnect -du=AHB_Slave -du=AHB_Default_Slave -du=AHB_System_Top 
+Coverage Report Summary Data by DU
+
+=================================================================================
+=== Design Unit: work.AHB_Arbiter
+=================================================================================
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Branches                        64        59         5    92.18%
+    Conditions                      59        43        16    72.88%
+    FSM States                       3         3         0   100.00%
+    FSM Transitions                  6         6         0   100.00%
+    Statements                      71        66         5    92.95%
+    Toggles                        119        76        43    63.86%
+
+=================================================================================
+=== Design Unit: work.AHB_Default_Slave
+=================================================================================
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Branches                         8         8         0   100.00%
+    FSM States                       3         3         0   100.00%
+    FSM Transitions                  4         3         1    75.00%
+    Statements                      21        21         0   100.00%
+    Toggles                         26        23         3    88.46%
+
+=================================================================================
+=== Design Unit: work.AHB_Interconnect
+=================================================================================
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Statements                       1         1         0   100.00%
+    Toggles                        892       657       235    73.65%
+
+=================================================================================
+=== Design Unit: work.AHB_Slave
+=================================================================================
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Branches                        99        66        33    66.66%
+    Conditions                      42        29        13    69.04%
+    FSM States                       6         6         0   100.00%
+    FSM Transitions                 12        11         1    91.66%
+    Statements                     125        95        30    76.00%
+    Toggles                        350       281        69    80.28%
+
+=================================================================================
+=== Design Unit: work.AHB_System_Top
+=================================================================================
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Toggles                       1066       745       321    69.88%
+
+=================================================================================
+=== Design Unit: work.ahb_addr_ctrl_mux
+=================================================================================
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Branches                         3         3         0   100.00%
+    Conditions                       2         1         1    50.00%
+    Statements                      16        16         0   100.00%
+    Toggles                        254       168        86    66.14%
+
+=================================================================================
+=== Design Unit: work.ahb_decoder
+=================================================================================
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Branches                         5         5         0   100.00%
+    Statements                      14        14         0   100.00%
+    Toggles                         76        72         4    94.73%
+
+=================================================================================
+=== Design Unit: work.ahb_read_data_mux
+=================================================================================
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Branches                         8         8         0   100.00%
+    Statements                       9         9         0   100.00%
+    Toggles                        270       251        19    92.96%
+
+=================================================================================
+=== Design Unit: work.ahb_ready_mux
+=================================================================================
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Branches                         8         8         0   100.00%
+    Statements                       9         9         0   100.00%
+    Toggles                         24        23         1    95.83%
+
+=================================================================================
+=== Design Unit: work.ahb_resp_mux
+=================================================================================
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Branches                         8         8         0   100.00%
+    Statements                       9         9         0   100.00%
+    Toggles                         34        27         7    79.41%
+
+=================================================================================
+=== Design Unit: work.ahb_write_data_mux
+=================================================================================
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Branches                         6         6         0   100.00%
+    Statements                       7         7         0   100.00%
+    Toggles                        202       199         3    98.51%
+
+
+Total Coverage By Design Unit (filtered view): 84.55%
+
+End time: 14:29:41 on Jul 13,2026, Elapsed time: 0:00:00
+Errors: 0, Warnings: 0

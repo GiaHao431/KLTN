@@ -1,0 +1,43 @@
+ 
+======================================================================
+ RTL-ONLY COVERAGE (cong theo INSTANCE THAT, khong union theo DU)
+======================================================================
+
+Instances DUA VAO tinh (13):
+    + /tb_top/u_dut/u_intc/u_arbiter   [AHB_Arbiter]
+    + /tb_top/u_dut/u_intc/u_decoder   [ahb_decoder]
+    + /tb_top/u_dut/u_intc/u_addr_ctrl_mux   [ahb_addr_ctrl_mux]
+    + /tb_top/u_dut/u_intc/u_write_data_mux   [ahb_write_data_mux]
+    + /tb_top/u_dut/u_intc/u_read_data_mux   [ahb_read_data_mux]
+    + /tb_top/u_dut/u_intc/u_resp_mux   [ahb_resp_mux]
+    + /tb_top/u_dut/u_intc/u_ready_mux   [ahb_ready_mux]
+    + /tb_top/u_dut/u_intc   [AHB_Interconnect]
+    + /tb_top/u_dut/u_slave1   [AHB_Slave]
+    + /tb_top/u_dut/u_slave2   [AHB_Slave]
+    + /tb_top/u_dut/u_slave3   [AHB_Slave]
+    + /tb_top/u_dut/u_default_slave   [AHB_Default_Slave]
+    + /tb_top/u_dut   [AHB_System_Top]
+
+Instances LOAI RA vi la TB/probe (9):
+    - /tb_top/m1_if   [ahb_master_if]
+    - /tb_top/m2_if   [ahb_master_if]
+    - /tb_top/sys_if   [ahb_sys_if]
+    - /tb_top/u_dut/u_slave1/u_bd   [ahb_slave_bd_if]
+    - /tb_top/u_dut/u_slave2/u_bd   [ahb_slave_bd_if]
+    - /tb_top/u_dut/u_slave3/u_bd   [ahb_slave_bd_if]
+    - /tb_top/u_dut/u_default_slave/u_bd   [ahb_default_slave_bd_if]
+    - /tb_top   [tb_top]
+    - /ahb_pkg   [ahb_pkg]
+
+----------------------------------------------------------------------
+Category                  Bins      Hits    Coverage
+----------------------------------------------------------------------
+Statements                 532       475      89.29%
+Branches                   407       352      86.49%
+Conditions                 187       143      76.47%
+Toggles                   4013      3147      78.42%
+FSM States                  24        24     100.00%
+FSM Transitions             46        42      91.30%
+----------------------------------------------------------------------
+TOTAL (all categories)      5209      4183      80.30%
+======================================================================

@@ -1,0 +1,23 @@
+RTL=~/questa_rtl
+UVM=~/questa_uvm
+
+# ---- 1a: Compile RTL với coverage (module thiết kế thật) ----
+vlog -64 -cover bcstf \
+    ${RTL}/ahb_decoder.sv \
+    ${RTL}/ahb_addr_ctrl_mux.sv \
+    ${RTL}/ahb_write_data_mux.sv \
+    ${RTL}/ahb_read_data_mux.sv \
+    ${RTL}/ahb_resp_mux.sv \
+    ${RTL}/ahb_ready_mux.sv \
+    ${RTL}/AHB_Arbiter.sv \
+    ${RTL}/AHB_Slave.sv \
+    ${RTL}/AHB_Default_Slave.sv \
+    ${RTL}/AHB_Interconnect.sv \
+    ${RTL}/AHB_System_Top.sv
+
+# ---- 1b: Compile testbench (KHÔNG -cover — đây là TB, không phải RTL cần đo) ----
+# testbench.sv tự `include ahb_interfaces.sv + 5 file ahb_pkg_* bên trong nó,
+# nên chỉ cần trỏ +incdir cho vlog tìm thấy các file được include.
+
+vlog -64 +incdir+${UVM} \
+    ${UVM}/testbench.sv

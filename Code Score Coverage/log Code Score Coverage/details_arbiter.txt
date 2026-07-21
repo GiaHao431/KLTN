@@ -1,0 +1,576 @@
+=================================================================================
+=== Instance: /tb_top/u_dut/u_intc/u_arbiter
+=== Design Unit: work.AHB_Arbiter
+=================================================================================
+Branch Coverage:
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Branches                        64        59         5    92.18%
+
+================================Branch Details================================
+
+Branch Coverage for instance /tb_top/u_dut/u_intc/u_arbiter
+
+    Line         Item                      Count     Source 
+    ----         ----                      -----     ------ 
+  File /home/giahao67/questa_rtl/AHB_Arbiter.sv
+------------------------------------CASE Branch------------------------------------
+    105                                    26193     Count coming in to CASE
+    106             1                        405     
+    113             1                      13224     
+    144             1                      12357     
+    162             1                        207     
+Branch totals: 4 hits of 4 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    107                                      405     Count coming in to IF
+    107             1                        143     
+    109             1                         24     
+                                             238     All False Count
+Branch totals: 3 hits of 3 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    121                                    13224     Count coming in to IF
+    121             1                        184     
+    123             1                         17     
+    134             1                      12468     
+                                             555     All False Count
+Branch totals: 4 hits of 4 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    124                                       17     Count coming in to IF
+    124             1                          2     
+    124             2                         15     
+Branch totals: 2 hits of 2 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    135                                    12468     Count coming in to IF
+    135             1                        208     
+    137             1                       6034     
+    139             1                       6226     
+Branch totals: 3 hits of 3 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    147                                    12357     Count coming in to IF
+    147             1                    ***0***     
+    149             1                          4     
+    152             1                      12153     
+                                             200     All False Count
+Branch totals: 3 hits of 4 branches = 75.00%
+
+------------------------------------IF Branch------------------------------------
+    150                                        4     Count coming in to IF
+    150             1                          2     
+    150             2                          2     
+Branch totals: 2 hits of 2 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    153                                    12153     Count coming in to IF
+    153             1                         81     
+    155             1                       6016     
+    157             1                       6056     
+Branch totals: 3 hits of 3 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    167                                    25538     Count coming in to IF
+    167             1                        138     
+    172             1                      25400     
+Branch totals: 2 hits of 2 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    180                                    25400     Count coming in to IF
+    180             1                        210     
+    182             1                         51     
+    192             1                       6003     
+    194             1                       6000     
+                                           13136     All False Count
+Branch totals: 5 hits of 5 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    202                                    25400     Count coming in to IF
+    202             1                         15     
+    204             1                         30     
+                                           25355     All False Count
+Branch totals: 3 hits of 3 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    207                                    25400     Count coming in to IF
+    207             1                          2     
+    209             1                          4     
+                                           25394     All False Count
+Branch totals: 3 hits of 3 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    224                                    24926     Count coming in to IF
+    224             1                        138     
+    226             1                      24788     
+Branch totals: 2 hits of 2 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    231                                    61600     Count coming in to IF
+    231             1                        138     
+    233             1                      61462     
+Branch totals: 2 hits of 2 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    234                                    61462     Count coming in to IF
+    234             1                      12880     
+    236             1                      48393     
+                                             189     All False Count
+Branch totals: 3 hits of 3 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    248                                      985     Count coming in to IF
+    248             1                        138     
+    251             1                        622     
+                                             225     All False Count
+Branch totals: 3 hits of 3 branches = 100.00%
+
+------------------------------------IF Branch------------------------------------
+    252                                      622     Count coming in to IF
+    252             1                        219     
+    271             1                        115     
+    278             1                    ***0***     
+                                             288     All False Count
+Branch totals: 3 hits of 4 branches = 75.00%
+
+------------------------------------CASE Branch------------------------------------
+    253                                      219     Count coming in to CASE
+    254             1                          8     
+    254             2                         21     
+    258             1                    ***0***     
+    258             2                          4     
+    262             1                    ***0***     
+    262             2                    ***0***     
+    266             1                        186     
+Branch totals: 4 hits of 7 branches = 57.14%
+
+------------------------------------IF Branch------------------------------------
+    272                                      115     Count coming in to IF
+    272             1                         33     
+    275             1                         82     
+Branch totals: 2 hits of 2 branches = 100.00%
+
+------------------------------------CASE Branch------------------------------------
+    292                                    12593     Count coming in to CASE
+    293             1                       6165     
+    299             1                       6052     
+    305             1                        376     
+Branch totals: 3 hits of 3 branches = 100.00%
+
+
+Condition Coverage:
+    Enabled Coverage              Bins   Covered    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Conditions                      59        43        16    72.88%
+
+================================Condition Details================================
+
+Condition Coverage for instance /tb_top/u_dut/u_intc/u_arbiter --
+
+  File /home/giahao67/questa_rtl/AHB_Arbiter.sv
+----------------Focused Condition View-------------------
+Line       107 Item    1  (eff_req_m1 && (~eff_req_m2 || (last_master_q == 2)))
+Condition totals: 1 of 3 input terms covered = 33.33%
+
+            Input Term   Covered  Reason for no coverage   Hint
+           -----------  --------  -----------------------  --------------
+            eff_req_m1         Y
+            eff_req_m2         N  '_1' not hit             Hit '_1'
+  (last_master_q == 2)         N  '_0' not hit             Hit '_0'
+
+     Rows:       Hits  FEC Target              Non-masking condition(s)      
+ ---------  ---------  --------------------    -------------------------     
+  Row   1:         69  eff_req_m1_0            -                             
+  Row   2:         68  eff_req_m1_1            (~eff_req_m2 || (last_master_q == 2))
+  Row   3:         64  eff_req_m2_0            eff_req_m1                    
+  Row   4:    ***0***  eff_req_m2_1            (eff_req_m1 && ~(last_master_q == 2))
+  Row   5:    ***0***  (last_master_q == 2)_0  (eff_req_m1 && eff_req_m2)    
+  Row   6:         14  (last_master_q == 2)_1  (eff_req_m1 && eff_req_m2)    
+
+----------------Focused Condition View-------------------
+Line       109 Item    1  (eff_req_m2 && (~eff_req_m1 || (last_master_q == 1)))
+Condition totals: 1 of 3 input terms covered = 33.33%
+
+            Input Term   Covered  Reason for no coverage   Hint
+           -----------  --------  -----------------------  --------------
+            eff_req_m2         Y
+            eff_req_m1         N  '_1' not hit             Hit '_1'
+  (last_master_q == 1)         N  No hits                  Hit '_0' and '_1'
+
+     Rows:       Hits  FEC Target              Non-masking condition(s)      
+ ---------  ---------  --------------------    -------------------------     
+  Row   1:         69  eff_req_m2_0            -                             
+  Row   2:         13  eff_req_m2_1            (~eff_req_m1 || (last_master_q == 1))
+  Row   3:         13  eff_req_m1_0            eff_req_m2                    
+  Row   4:    ***0***  eff_req_m1_1            (eff_req_m2 && ~(last_master_q == 1))
+  Row   5:    ***0***  (last_master_q == 1)_0  (eff_req_m2 && eff_req_m1)    
+  Row   6:    ***0***  (last_master_q == 1)_1  (eff_req_m2 && eff_req_m1)    
+
+----------------Focused Condition View-------------------
+Line       121 Item    1  (HLOCK_M1 || burst_active)
+Condition totals: 2 of 2 input terms covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       134 Item    1  (HREADY && (HTRANS_S == 0))
+Condition totals: 2 of 2 input terms covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       135 Item    1  (eff_req_m1 ~| eff_req_m2)
+Condition totals: 2 of 2 input terms covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       137 Item    1  (eff_req_m2 && ((~eff_req_m1 || (last_master_q == 1)) || idle_force_switch))
+Condition totals: 4 of 4 input terms covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       147 Item    1  (HLOCK_M2 || burst_active)
+Condition totals: 0 of 2 input terms covered = 0.00%
+
+    Input Term   Covered  Reason for no coverage   Hint
+   -----------  --------  -----------------------  --------------
+      HLOCK_M2         N  '_1' not hit             Hit '_1'
+  burst_active         N  '_1' not hit             Hit '_1'
+
+     Rows:       Hits  FEC Target            Non-masking condition(s)      
+ ---------  ---------  --------------------  -------------------------     
+  Row   1:         17  HLOCK_M2_0            ~burst_active                 
+  Row   2:    ***0***  HLOCK_M2_1            -                             
+  Row   3:         17  burst_active_0        ~HLOCK_M2                     
+  Row   4:    ***0***  burst_active_1        ~HLOCK_M2                     
+
+----------------Focused Condition View-------------------
+Line       152 Item    1  (HREADY && (HTRANS_S == 0))
+Condition totals: 2 of 2 input terms covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       153 Item    1  (eff_req_m1 ~| eff_req_m2)
+Condition totals: 2 of 2 input terms covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       155 Item    1  (eff_req_m1 && ((~eff_req_m2 || (last_master_q == 2)) || idle_force_switch))
+Condition totals: 4 of 4 input terms covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       180 Item    1  (((state_q == ST_GNT_M1) && (HTRANS_S != 0)) && HREADY)
+Condition totals: 3 of 3 input terms covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       182 Item    1  (((state_q == ST_GNT_M2) && (HTRANS_S != 0)) && HREADY)
+Condition totals: 2 of 3 input terms covered = 66.66%
+
+              Input Term   Covered  Reason for no coverage   Hint
+             -----------  --------  -----------------------  --------------
+  (state_q == ST_GNT_M2)         Y
+         (HTRANS_S != 0)         Y
+                  HREADY         N  '_0' not hit             Hit '_0'
+
+     Rows:       Hits  FEC Target                Non-masking condition(s)      
+ ---------  ---------  --------------------      -------------------------     
+  Row   1:         69  (state_q == ST_GNT_M2)_0  -                             
+  Row   2:         16  (state_q == ST_GNT_M2)_1  (HREADY && (HTRANS_S != 0))   
+  Row   3:         17  (HTRANS_S != 0)_0         (state_q == ST_GNT_M2)        
+  Row   4:         16  (HTRANS_S != 0)_1         (HREADY && (state_q == ST_GNT_M2))
+  Row   5:    ***0***  HREADY_0                  ((state_q == ST_GNT_M2) && (HTRANS_S != 0))
+  Row   6:         16  HREADY_1                  ((state_q == ST_GNT_M2) && (HTRANS_S != 0))
+
+----------------Focused Condition View-------------------
+Line       192 Item    1  ((((state_q == ST_GNT_M1) && idle_force_switch) && eff_req_m2) && HREADY)
+Condition totals: 3 of 4 input terms covered = 75.00%
+
+              Input Term   Covered  Reason for no coverage   Hint
+             -----------  --------  -----------------------  --------------
+  (state_q == ST_GNT_M1)         Y
+       idle_force_switch         Y
+              eff_req_m2         Y
+                  HREADY         N  '_0' not hit             Hit '_0'
+
+     Rows:       Hits  FEC Target                Non-masking condition(s)      
+ ---------  ---------  --------------------      -------------------------     
+  Row   1:         69  (state_q == ST_GNT_M1)_0  -                             
+  Row   2:          4  (state_q == ST_GNT_M1)_1  (HREADY && eff_req_m2 && idle_force_switch)
+  Row   3:         68  idle_force_switch_0       (state_q == ST_GNT_M1)        
+  Row   4:          4  idle_force_switch_1       (HREADY && eff_req_m2 && (state_q == ST_GNT_M1))
+  Row   5:          4  eff_req_m2_0              ((state_q == ST_GNT_M1) && idle_force_switch)
+  Row   6:          4  eff_req_m2_1              (HREADY && ((state_q == ST_GNT_M1) && idle_force_switch))
+  Row   7:    ***0***  HREADY_0                  (((state_q == ST_GNT_M1) && idle_force_switch) && eff_req_m2)
+  Row   8:          4  HREADY_1                  (((state_q == ST_GNT_M1) && idle_force_switch) && eff_req_m2)
+
+----------------Focused Condition View-------------------
+Line       194 Item    1  ((((state_q == ST_GNT_M2) && idle_force_switch) && eff_req_m1) && HREADY)
+Condition totals: 3 of 4 input terms covered = 75.00%
+
+              Input Term   Covered  Reason for no coverage   Hint
+             -----------  --------  -----------------------  --------------
+  (state_q == ST_GNT_M2)         Y
+       idle_force_switch         Y
+              eff_req_m1         Y
+                  HREADY         N  '_0' not hit             Hit '_0'
+
+     Rows:       Hits  FEC Target                Non-masking condition(s)      
+ ---------  ---------  --------------------      -------------------------     
+  Row   1:         69  (state_q == ST_GNT_M2)_0  -                             
+  Row   2:          2  (state_q == ST_GNT_M2)_1  (HREADY && eff_req_m1 && idle_force_switch)
+  Row   3:         17  idle_force_switch_0       (state_q == ST_GNT_M2)        
+  Row   4:          2  idle_force_switch_1       (HREADY && eff_req_m1 && (state_q == ST_GNT_M2))
+  Row   5:          1  eff_req_m1_0              ((state_q == ST_GNT_M2) && idle_force_switch)
+  Row   6:          2  eff_req_m1_1              (HREADY && ((state_q == ST_GNT_M2) && idle_force_switch))
+  Row   7:    ***0***  HREADY_0                  (((state_q == ST_GNT_M2) && idle_force_switch) && eff_req_m1)
+  Row   8:          2  HREADY_1                  (((state_q == ST_GNT_M2) && idle_force_switch) && eff_req_m1)
+
+----------------Focused Condition View-------------------
+Line       204 Item    1  (((state_q == ST_GNT_M1) && (HRESP_S == 3)) && ~HLOCK_M1)
+Condition totals: 2 of 3 input terms covered = 66.66%
+
+              Input Term   Covered  Reason for no coverage   Hint
+             -----------  --------  -----------------------  --------------
+  (state_q == ST_GNT_M1)         Y
+          (HRESP_S == 3)         Y
+                HLOCK_M1         N  '_1' not hit             Hit '_1'
+
+     Rows:       Hits  FEC Target                Non-masking condition(s)      
+ ---------  ---------  --------------------      -------------------------     
+  Row   1:         69  (state_q == ST_GNT_M1)_0  -                             
+  Row   2:         15  (state_q == ST_GNT_M1)_1  (~HLOCK_M1 && (HRESP_S == 3)) 
+  Row   3:         68  (HRESP_S == 3)_0          (state_q == ST_GNT_M1)        
+  Row   4:         15  (HRESP_S == 3)_1          (~HLOCK_M1 && (state_q == ST_GNT_M1))
+  Row   5:         15  HLOCK_M1_0                ((state_q == ST_GNT_M1) && (HRESP_S == 3))
+  Row   6:    ***0***  HLOCK_M1_1                ((state_q == ST_GNT_M1) && (HRESP_S == 3))
+
+----------------Focused Condition View-------------------
+Line       209 Item    1  (((state_q == ST_GNT_M2) && (HRESP_S == 3)) && ~HLOCK_M2)
+Condition totals: 2 of 3 input terms covered = 66.66%
+
+              Input Term   Covered  Reason for no coverage   Hint
+             -----------  --------  -----------------------  --------------
+  (state_q == ST_GNT_M2)         Y
+          (HRESP_S == 3)         Y
+                HLOCK_M2         N  '_1' not hit             Hit '_1'
+
+     Rows:       Hits  FEC Target                Non-masking condition(s)      
+ ---------  ---------  --------------------      -------------------------     
+  Row   1:         69  (state_q == ST_GNT_M2)_0  -                             
+  Row   2:          2  (state_q == ST_GNT_M2)_1  (~HLOCK_M2 && (HRESP_S == 3)) 
+  Row   3:         17  (HRESP_S == 3)_0          (state_q == ST_GNT_M2)        
+  Row   4:          2  (HRESP_S == 3)_1          (~HLOCK_M2 && (state_q == ST_GNT_M2))
+  Row   5:          2  HLOCK_M2_0                ((state_q == ST_GNT_M2) && (HRESP_S == 3))
+  Row   6:    ***0***  HLOCK_M2_1                ((state_q == ST_GNT_M2) && (HRESP_S == 3))
+
+----------------Focused Condition View-------------------
+Line       234 Item    1  (((HTRANS_S != 0) || (state_q == ST_IDLE)) || (state_d != state_q))
+Condition totals: 3 of 3 input terms covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       236 Item    1  ((((state_q == ST_GNT_M1) || (state_q == ST_GNT_M2)) && HREADY) && (idle_grant_cnt < 7))
+Condition totals: 2 of 4 input terms covered = 50.00%
+
+              Input Term   Covered  Reason for no coverage   Hint
+             -----------  --------  -----------------------  --------------
+  (state_q == ST_GNT_M1)         N  '_0' not hit             Hit '_0'
+  (state_q == ST_GNT_M2)         N  '_0' not hit             Hit '_0'
+                  HREADY         Y
+    (idle_grant_cnt < 7)         Y
+
+     Rows:       Hits  FEC Target                Non-masking condition(s)      
+ ---------  ---------  --------------------      -------------------------     
+  Row   1:    ***0***  (state_q == ST_GNT_M1)_0  ~(state_q == ST_GNT_M2)       
+  Row   2:         68  (state_q == ST_GNT_M1)_1  ((idle_grant_cnt < 7) && HREADY)
+  Row   3:    ***0***  (state_q == ST_GNT_M2)_0  ~(state_q == ST_GNT_M1)       
+  Row   4:         17  (state_q == ST_GNT_M2)_1  ((idle_grant_cnt < 7) && HREADY && ~(state_q == ST_GNT_M1))
+  Row   5:         56  HREADY_0                  ((state_q == ST_GNT_M1) || (state_q == ST_GNT_M2))
+  Row   6:         69  HREADY_1                  ((idle_grant_cnt < 7) && ((state_q == ST_GNT_M1) || (state_q == ST_GNT_M2)))
+  Row   7:          3  (idle_grant_cnt < 7)_0    (((state_q == ST_GNT_M1) || (state_q == ST_GNT_M2)) && HREADY)
+  Row   8:         69  (idle_grant_cnt < 7)_1    (((state_q == ST_GNT_M1) || (state_q == ST_GNT_M2)) && HREADY)
+
+----------------Focused Condition View-------------------
+Line       252 Item    1  (HTRANS_S == 2)
+Condition totals: 1 of 1 input term covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       271 Item    1  (burst_active && (HTRANS_S == 3))
+Condition totals: 1 of 2 input terms covered = 50.00%
+
+       Input Term   Covered  Reason for no coverage   Hint
+      -----------  --------  -----------------------  --------------
+     burst_active         Y
+  (HTRANS_S == 3)         N  '_0' not hit             Hit '_0'
+
+     Rows:       Hits  FEC Target            Non-masking condition(s)      
+ ---------  ---------  --------------------  -------------------------     
+  Row   1:         69  burst_active_0        -                             
+  Row   2:         16  burst_active_1        (HTRANS_S == 3)               
+  Row   3:    ***0***  (HTRANS_S == 3)_0     burst_active                  
+  Row   4:         16  (HTRANS_S == 3)_1     burst_active                  
+
+----------------Focused Condition View-------------------
+Line       272 Item    1  (burst_remaining <= 1)
+Condition totals: 1 of 1 input term covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       278 Item    1  (burst_active && (HTRANS_S == 0))
+Condition totals: 0 of 2 input terms covered = 0.00%
+
+       Input Term   Covered  Reason for no coverage   Hint
+      -----------  --------  -----------------------  --------------
+     burst_active         N  '_1' not hit             Hit '_1'
+  (HTRANS_S == 0)         N  No hits                  Hit '_0' and '_1'
+
+     Rows:       Hits  FEC Target            Non-masking condition(s)      
+ ---------  ---------  --------------------  -------------------------     
+  Row   1:         69  burst_active_0        -                             
+  Row   2:    ***0***  burst_active_1        (HTRANS_S == 0)               
+  Row   3:    ***0***  (HTRANS_S == 0)_0     burst_active                  
+  Row   4:    ***0***  (HTRANS_S == 0)_1     burst_active                  
+
+
+FSM Coverage:
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    FSM States                       3         3         0   100.00%
+    FSM Transitions                  6         6         0   100.00%
+
+================================FSM Details================================
+
+FSM Coverage for instance /tb_top/u_dut/u_intc/u_arbiter --
+
+FSM_ID: state_q
+    Current State Object : state_q
+    ----------------------
+    State Value MapInfo :
+    ---------------------
+Line          State Name               Value
+----          ----------               -----
+ 106             ST_IDLE                   0
+ 144           ST_GNT_M2                   2
+ 113           ST_GNT_M1                   1
+    Covered States :
+    ----------------
+                   State           Hit_count
+                   -----           ---------
+                 ST_IDLE                 518          
+               ST_GNT_M2               12209          
+               ST_GNT_M1               12811          
+    Covered Transitions :
+    ---------------------
+Line            Trans_ID           Hit_count          Transition          
+----            --------           ---------          ----------          
+ 110                   0                  24          ST_IDLE -> ST_GNT_M2          
+ 108                   1                 143          ST_IDLE -> ST_GNT_M1          
+ 156                   2                6015          ST_GNT_M2 -> ST_GNT_M1          
+ 154                   3                  37          ST_GNT_M2 -> ST_IDLE          
+ 138                   4                6028          ST_GNT_M1 -> ST_GNT_M2          
+ 136                   5                 125          ST_GNT_M1 -> ST_IDLE          
+
+
+    Summary                       Bins      Hits    Misses  Coverage
+    -------                       ----      ----    ------  --------
+        FSM States                   3         3         0   100.00%
+        FSM Transitions              6         6         0   100.00%
+Statement Coverage:
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Statements                      71        66         5    92.95%
+
+================================Statement Details================================
+
+Statement Coverage for instance /tb_top/u_dut/u_intc/u_arbiter --
+
+    Line         Item                      Count     Source 
+    ----         ----                      -----     ------ 
+  File /home/giahao67/questa_rtl/AHB_Arbiter.sv
+    95              1                        754     
+    100             1                      60790     
+    102             1                      26193     
+    103             1                      26193     
+    108             1                        143     
+    110             1                         24     
+    122             1                        184     
+    124             1                         17     
+    136             1                        208     
+    138             1                       6034     
+    140             1                       6226     
+    148             1                    ***0***     
+    150             1                          4     
+    154             1                         81     
+    156             1                       6016     
+    158             1                       6056     
+    162             1                        207     
+    166             1                      25538     
+    168             1                        138     
+    169             1                        138     
+    170             1                        138     
+    171             1                        138     
+    173             1                      25400     
+    181             1                        210     
+    183             1                         51     
+    193             1                       6003     
+    195             1                       6000     
+    203             1                         15     
+    205             1                         30     
+    208             1                          2     
+    210             1                          4     
+    223             1                      24926     
+    225             1                        138     
+    227             1                      24788     
+    230             1                      61600     
+    232             1                        138     
+    235             1                      12880     
+    238             1                      48393     
+    247             1                        985     
+    249             1                        138     
+    250             1                        138     
+    255             1                         29     
+    256             1                         29     
+    259             1                          4     
+    260             1                          4     
+    263             1                    ***0***     
+    264             1                    ***0***     
+    267             1                        186     
+    268             1                        186     
+    273             1                         33     
+    274             1                         33     
+    276             1                         82     
+    279             1                    ***0***     
+    280             1                    ***0***     
+    286             1                      12593     
+    287             1                      12593     
+    288             1                      12593     
+    289             1                      12593     
+    290             1                      12593     
+    294             1                       6165     
+    295             1                       6165     
+    296             1                       6165     
+    297             1                       6165     
+    300             1                       6052     
+    301             1                       6052     
+    302             1                       6052     
+    303             1                       6052     
+    306             1                        376     
+    307             1                        376     
+    308             1                        376     
+    309             1                        376     
+Toggle Coverage:
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Toggles                        119        76        43    63.86%
+
+================================Toggle Details================================
+
+Toggle Coverage for instance /tb_top/u_dut/u_intc/u_arbiter --
+
+                                              Node      1H->0L      0L->1H                          "Coverage"
+                                              ---------------------------------------------------------------
+                                          HLOCK_M2           0           0                                0.00 
+                                      HMASTER[1-3]           0           0                                0.00 
+                                           HRESETn           0          69                               50.00 
+                             HSPLIT_COMBINED[2-15]           0           0                                0.00 
+                              burst_remaining[3-5]           0           0                                0.00 
+
+Total Node Count     =         64 
+Toggled Node Count   =         42 
+Untoggled Node Count =         22 
+
+Toggle Coverage      =      63.86% (76 of 119 bins)
+
+
+Total Coverage By Instance (filtered view): 86.98%

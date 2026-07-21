@@ -1,0 +1,164 @@
+// ahb_interfaces.svh -- M5b -- interfaces + binds (include TRUOC package, tu testbench.sv)
+`include "uvm_macros.svh"
+interface ahb_master_if(input logic HCLK, input logic HRESETn);
+    logic        HBUSREQ;
+    logic        HLOCK;
+    logic [31:0] HADDR;
+    logic [31:0] HWDATA;
+    logic [1:0]  HTRANS;
+    logic        HWRITE;
+    logic [2:0]  HSIZE;
+    logic [2:0]  HBURST;
+    logic        HGRANT;
+    logic [31:0] HRDATA_M;
+    logic [1:0]  HRESP_M;
+    logic        HREADY;
+    initial begin
+        HBUSREQ = 1'b0;
+        HLOCK   = 1'b0;
+        HADDR   = 32'h0;
+        HWDATA  = 32'h0;
+        HTRANS  = 2'b00;
+        HWRITE  = 1'b0;
+        HSIZE   = 3'b010;
+        HBURST  = 3'b000;
+    end
+
+    clocking drv_cb @(posedge HCLK);
+        default input #1step output #1;
+        output HBUSREQ, HLOCK, HADDR, HWDATA, HTRANS, HWRITE, HSIZE, HBURST;
+        input  HGRANT, HRDATA_M, HRESP_M, HREADY;
+    endclocking
+
+    clocking mon_cb @(posedge HCLK);
+        default input #1step;
+        input HBUSREQ, HLOCK, HADDR, HWDATA, HTRANS, HWRITE, HSIZE, HBURST,
+              HGRANT,  HRDATA_M, HRESP_M, HREADY;
+    endclocking
+
+    modport drv_mp(clocking drv_cb, input HCLK, input HRESETn);
+    modport mon_mp(clocking mon_cb, input HCLK, input HRESETn);
+endinterface : ahb_master_if
+
+interface ahb_sys_if(input logic HCLK, input logic HRESETn);
+    logic force_split_s1, force_split_s2, force_split_s3;
+    logic force_retry_s1, force_retry_s2, force_retry_s3;
+    logic [31:0] HADDR_S_o;
+    logic [1:0]  HTRANS_S_o;
+    logic        HWRITE_S_o;
+    logic [2:0]  HSIZE_S_o, HBURST_S_o;
+    logic [3:0]  HMASTER_o;
+    logic        HMASTLOCK_o;
+    logic        HREADY_GLOBAL_o;
+    logic        HSEL_S1_o, HSEL_S2_o, HSEL_S3_o, HSEL_DEFAULT_o;
+    logic [15:0] HSPLIT_S1_o, HSPLIT_S2_o, HSPLIT_S3_o;
+    initial begin
+        force_split_s1 = 1'b0; force_split_s2 = 1'b0; force_split_s3 = 1'b0;
+        force_retry_s1 = 1'b0; force_retry_s2 = 1'b0; force_retry_s3 = 1'b0;
+    end
+
+    clocking ctrl_cb @(posedge HCLK);
+        default input #1step;
+        input  HADDR_S_o, HTRANS_S_o, HWRITE_S_o, HSIZE_S_o, HBURST_S_o,
+               HMASTER_o, HMASTLOCK_o, HREADY_GLOBAL_o,
+               HSEL_S1_o, HSEL_S2_o, HSEL_S3_o, HSEL_DEFAULT_o,
+               HSPLIT_S1_o, HSPLIT_S2_o, HSPLIT_S3_o;
+    endclocking
+
+    clocking mon_cb @(posedge HCLK);
+        default input #1step;
+        input force_split_s1, force_split_s2, force_split_s3,
+              force_retry_s1, force_retry_s2, force_retry_s3,
+              HADDR_S_o, HTRANS_S_o, HWRITE_S_o, HSIZE_S_o, HBURST_S_o,
+              HMASTER_o, HMASTLOCK_o, HREADY_GLOBAL_o,
+              HSEL_S1_o, HSEL_S2_o, HSEL_S3_o, HSEL_DEFAULT_o,
+              HSPLIT_S1_o, HSPLIT_S2_o, HSPLIT_S3_o;
+    endclocking
+
+    modport ctrl_mp(clocking ctrl_cb, input HCLK, input HRESETn);
+    modport mon_mp (clocking mon_cb,  input HCLK, input HRESETn);
+endinterface : ahb_sys_if
+
+interface ahb_slave_bd_if(
+    input  logic        HCLK,
+    input  logic        HRESETn,
+    input  logic [2:0]  ps_slave,
+    input  logic [2:0]  ns_slave,
+    input  logic [7:0]  local_addr,
+    input  logic [7:0]  local_addr_base,
+    input  logic [2:0]  local_burst,
+    input  logic [2:0]  local_size,
+    input  logic [5:0]  beat_cnt,
+    input  logic [3:0]  split_master_reg,
+    input  logic        resp_abort,
+    input  logic        HREADYOUT,
+    input  logic [1:0]  HRESP,
+    input  logic [15:0] HSPLITx,
+    input  logic [31:0] HRDATA,
+    input  logic [31:0] memory_slave [0:255]
+);
+    clocking mon_cb @(posedge HCLK);
+        default input #1step;
+        input ps_slave, ns_slave, local_addr, local_addr_base,
+              local_burst, local_size, beat_cnt, split_master_reg,
+              resp_abort, HREADYOUT, HRESP, HSPLITx, HRDATA;
+    endclocking
+    modport mon_mp(clocking mon_cb, input HCLK, input HRESETn,
+                   input memory_slave);
+endinterface : ahb_slave_bd_if
+
+interface ahb_default_slave_bd_if(
+    input logic        HCLK,
+    input logic        HRESETn,
+    input logic [1:0]  ps,
+    input logic [1:0]  ns,
+    input logic        active_transfer,
+    input logic        HREADYOUT_DEFAULT,
+    input logic [1:0]  HRESP_DEFAULT
+);
+    clocking mon_cb @(posedge HCLK);
+        default input #1step;
+        input ps, ns, active_transfer, HREADYOUT_DEFAULT, HRESP_DEFAULT;
+    endclocking
+    modport mon_mp(clocking mon_cb, input HCLK, input HRESETn);
+endinterface : ahb_default_slave_bd_if
+
+interface ahb_reset_ctrl_if(input logic HCLK);
+    logic reset_req;
+    logic reset_ack;
+    initial begin
+        reset_req = 1'b0;
+    end
+endinterface : ahb_reset_ctrl_if
+
+bind AHB_Slave ahb_slave_bd_if u_bd (
+    .HCLK            (HCLK),
+    .HRESETn         (HRESETn),
+    .ps_slave        (ps_slave),
+    .ns_slave        (ns_slave),
+    .local_addr      (local_addr),
+    .local_addr_base (local_addr_base),
+    .local_burst     (local_burst),
+    .local_size      (local_size),
+    .beat_cnt        (beat_cnt),
+    .split_master_reg(split_master_reg),
+    .resp_abort      (resp_abort),
+    .HREADYOUT       (HREADYOUT),
+    .HRESP           (HRESP),
+    .HSPLITx         (HSPLITx),
+    .HRDATA          (HRDATA),
+    .memory_slave    (memory_slave)
+);
+
+bind AHB_Default_Slave ahb_default_slave_bd_if u_bd (
+    .HCLK             (HCLK),
+    .HRESETn          (HRESETn),
+    .ps               (ps),
+    .ns               (ns),
+    .active_transfer  (active_transfer),
+    .HREADYOUT_DEFAULT(HREADYOUT_DEFAULT),
+    .HRESP_DEFAULT    (HRESP_DEFAULT)
+);
+
+
+ 

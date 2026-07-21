@@ -1,0 +1,2 @@
+cd ~/questa_uvm
+vsim -gui -viewcov merged_coverage_final.ucdb

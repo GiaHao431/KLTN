@@ -1,0 +1,110 @@
+=================================================================================
+=== Instance: /tb_top/u_dut/u_intc/u_addr_ctrl_mux
+=== Design Unit: work.ahb_addr_ctrl_mux
+=================================================================================
+Branch Coverage:
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Branches                         3         3         0   100.00%
+
+================================Branch Details================================
+
+Branch Coverage for instance /tb_top/u_dut/u_intc/u_addr_ctrl_mux
+
+    Line         Item                      Count     Source 
+    ----         ----                      -----     ------ 
+  File /home/giahao67/questa_rtl/ahb_addr_ctrl_mux.sv
+------------------------------------IF Branch------------------------------------
+    30                                     12795     Count coming in to IF
+    30              1                       6572     
+    36              1                       6154     
+    42              1                         69     
+Branch totals: 3 hits of 3 branches = 100.00%
+
+
+Condition Coverage:
+    Enabled Coverage              Bins   Covered    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Conditions                       2         1         1    50.00%
+
+================================Condition Details================================
+
+Condition Coverage for instance /tb_top/u_dut/u_intc/u_addr_ctrl_mux --
+
+  File /home/giahao67/questa_rtl/ahb_addr_ctrl_mux.sv
+----------------Focused Condition View-------------------
+Line       30 Item    1  (HMASTER_SEL == 0)
+Condition totals: 1 of 1 input term covered = 100.00%
+
+----------------Focused Condition View-------------------
+Line       36 Item    1  (HMASTER_SEL == 1)
+Condition totals: 0 of 1 input term covered = 0.00%
+
+          Input Term   Covered  Reason for no coverage   Hint
+         -----------  --------  -----------------------  --------------
+  (HMASTER_SEL == 1)         N  '_0' not hit             Hit '_0'
+
+     Rows:       Hits  FEC Target            Non-masking condition(s)      
+ ---------  ---------  --------------------  -------------------------     
+  Row   1:    ***0***  (HMASTER_SEL == 1)_0  -                             
+  Row   2:         17  (HMASTER_SEL == 1)_1  -                             
+
+
+Statement Coverage:
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Statements                      16        16         0   100.00%
+
+================================Statement Details================================
+
+Statement Coverage for instance /tb_top/u_dut/u_intc/u_addr_ctrl_mux --
+
+    Line         Item                      Count     Source 
+    ----         ----                      -----     ------ 
+  File /home/giahao67/questa_rtl/ahb_addr_ctrl_mux.sv
+    29              1                      12795     
+    31              1                       6572     
+    32              1                       6572     
+    33              1                       6572     
+    34              1                       6572     
+    35              1                       6572     
+    37              1                       6154     
+    38              1                       6154     
+    39              1                       6154     
+    40              1                       6154     
+    41              1                       6154     
+    43              1                         69     
+    44              1                         69     
+    45              1                         69     
+    46              1                         69     
+    47              1                         69     
+Toggle Coverage:
+    Enabled Coverage              Bins      Hits    Misses  Coverage
+    ----------------              ----      ----    ------  --------
+    Toggles                        254       168        86    66.14%
+
+================================Toggle Details================================
+
+Toggle Coverage for instance /tb_top/u_dut/u_intc/u_addr_ctrl_mux --
+
+                                              Node      1H->0L      0L->1H                          "Coverage"
+                                              ---------------------------------------------------------------
+                                     HADDR_M1[0-1]           0           0                                0.00 
+                                     HADDR_M2[0-1]           0           0                                0.00 
+                                    HADDR_M2[9-29]           0           0                                0.00 
+                                      HADDR_S[0-1]           0           0                                0.00 
+                                    HBURST_M2[0-2]           0           0                                0.00 
+                                  HMASTER_SEL[1-3]           0           0                                0.00 
+                                     HSIZE_M1[0-2]           0           0                                0.00 
+                                     HSIZE_M2[0-2]           0           0                                0.00 
+                                      HSIZE_S[0-2]           0           0                                0.00 
+                                      HTRANS_M2[0]           0           0                                0.00 
+
+Total Node Count     =        127 
+Toggled Node Count   =         84 
+Untoggled Node Count =         43 
+
+Toggle Coverage      =      66.14% (168 of 254 bins)
+
+
+Total Coverage By Instance (filtered view): 79.03%

@@ -1,0 +1,428 @@
+giahao67@TKVM:~/questa_uvm$ chmod +x run_all_coverage.sh
+giahao67@TKVM:~/questa_uvm$ bash run_all_coverage.sh
+========================================================
+ CLEAN — xoa du lieu coverage/report cu
+========================================================
+  Done — da xoa ucdb_all/, logs_coverage/, cac file report cu.
+
+========================================================
+ AHB Code Coverage Regression — FINAL
+ 2026-07-17 14:01
+ Tong so test: 93
+========================================================
+
+[001] smoke                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[002] T1_1                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[003] T1_2                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[004] T1_3                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[005] T1_4_5                         run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[006] T1_6_7                         run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[007] T1_8                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[008] T1_9                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[009] T1_10                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[010] T1_11a                         run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[011] T1_11b                         run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[012] T1_12                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[013] T1_13                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[014] T1_14_W                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[015] T1_14_R                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[016] T1_15a                         run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[017] T1_15b                         run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[018] T1_16                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[019] T1_17                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[020] T1_18                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[021] T2_1                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[022] T2_2                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[023] T2_3                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[024] T2_4                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[025] T2_5                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[026] T2_6                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[027] T2_7                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[028] T2_8                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[029] T2_9                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[030] T2_10                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[031] T2_11                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[032] T2_12                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[033] T2_13                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[034] T3_1                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[035] T3_2                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[036] T3_3                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[037] T3_4                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[038] T3_5                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[039] T3_6                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[040] T3_7                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[041] T3_8                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[042] T3_9                           run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[043] T3_10                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[044] T3_11                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[045] T3_12                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[046] T3_13                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[047] T3_14                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[048] T3_15                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[049] T3_16                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[050] T3_17                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[051] T3_18                          run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[052] T4                             run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[053] T1_9_S2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[054] T1_10_S2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[055] T1_13_S2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[056] T1_14W_S2                      run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[057] T1_14R_S2                      run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[058] T1_16_S2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[059] T1_17_S2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[060] T1_18_S2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[061] T1_4_5_S2                      run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[062] T1_9_S3                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[063] T1_10_S3                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[064] T1_13_S3                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[065] T1_14W_S3                      run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[066] T1_14R_S3                      run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[067] T1_16_S3                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[068] T1_17_S3                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[069] T1_18_S3                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[070] T1_4_5_S3                      run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[071] T1_3_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[072] T1_8_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[073] T1_9_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[074] T1_10_M2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[075] T1_12_M2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[076] T1_13_M2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[077] T1_14W_M2                      run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[078] T1_14R_M2                      run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[079] T1_INCR16_M2                   run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[080] T2_1_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[081] T2_2_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[082] T2_3_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[083] T2_4_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[084] T2_5_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[085] T2_6_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[086] T2_7_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[087] T2_8_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[088] T2_9_M2                        run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[089] T2_10_M2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[090] T2_11_M2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[091] T3_16_M2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[092] T3_18_M2                       run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+[093] T5_MIDRST                      run_all_coverage.sh: line 81: [: 0
+0: integer expression expected
+PASS
+
+========================================================
+ MERGE & REPORT
+========================================================
+UCDB files created: 93 / 93
+
+Merging 93 UCDBs...
+Questa Altera Starter FPGA Edition-64 vcover 2025.3 Coverage Utility 2025.09 Sep 15 2025
+Start time: 14:14:27 on Jul 17,2026
+vcover merge ./merged_coverage_final.ucdb ./ucdb_all/smoke.ucdb ./ucdb_all/T1_10_M2.ucdb ./ucdb_all/T1_10_S2.ucdb ./ucdb_all/T1_10_S3.ucdb ./ucdb_all/T1_10.ucdb ./ucdb_all/T1_11a.ucdb ./ucdb_all/T1_11b.ucdb ./ucdb_all/T1_12_M2.ucdb ./ucdb_all/T1_12.ucdb ./ucdb_all/T1_13_M2.ucdb ./ucdb_all/T1_13_S2.ucdb ./ucdb_all/T1_13_S3.ucdb ./ucdb_all/T1_13.ucdb ./ucdb_all/T1_14R_M2.ucdb ./ucdb_all/T1_14R_S2.ucdb ./ucdb_all/T1_14R_S3.ucdb ./ucdb_all/T1_14_R.ucdb ./ucdb_all/T1_14W_M2.ucdb ./ucdb_all/T1_14W_S2.ucdb ./ucdb_all/T1_14W_S3.ucdb ./ucdb_all/T1_14_W.ucdb ./ucdb_all/T1_15a.ucdb ./ucdb_all/T1_15b.ucdb ./ucdb_all/T1_16_S2.ucdb ./ucdb_all/T1_16_S3.ucdb ./ucdb_all/T1_16.ucdb ./ucdb_all/T1_17_S2.ucdb ./ucdb_all/T1_17_S3.ucdb ./ucdb_all/T1_17.ucdb ./ucdb_all/T1_18_S2.ucdb ./ucdb_all/T1_18_S3.ucdb ./ucdb_all/T1_18.ucdb ./ucdb_all/T1_1.ucdb ./ucdb_all/T1_2.ucdb ./ucdb_all/T1_3_M2.ucdb ./ucdb_all/T1_3.ucdb ./ucdb_all/T1_4_5_S2.ucdb ./ucdb_all/T1_4_5_S3.ucdb ./ucdb_all/T1_4_5.ucdb ./ucdb_all/T1_6_7.ucdb ./ucdb_all/T1_8_M2.ucdb ./ucdb_all/T1_8.ucdb ./ucdb_all/T1_9_M2.ucdb ./ucdb_all/T1_9_S2.ucdb ./ucdb_all/T1_9_S3.ucdb ./ucdb_all/T1_9.ucdb ./ucdb_all/T1_INCR16_M2.ucdb ./ucdb_all/T2_10_M2.ucdb ./ucdb_all/T2_10.ucdb ./ucdb_all/T2_11_M2.ucdb ./ucdb_all/T2_11.ucdb ./ucdb_all/T2_12.ucdb ./ucdb_all/T2_13.ucdb ./ucdb_all/T2_1_M2.ucdb ./ucdb_all/T2_1.ucdb ./ucdb_all/T2_2_M2.ucdb ./ucdb_all/T2_2.ucdb ./ucdb_all/T2_3_M2.ucdb ./ucdb_all/T2_3.ucdb ./ucdb_all/T2_4_M2.ucdb ./ucdb_all/T2_4.ucdb ./ucdb_all/T2_5_M2.ucdb ./ucdb_all/T2_5.ucdb ./ucdb_all/T2_6_M2.ucdb ./ucdb_all/T2_6.ucdb ./ucdb_all/T2_7_M2.ucdb ./ucdb_all/T2_7.ucdb ./ucdb_all/T2_8_M2.ucdb ./ucdb_all/T2_8.ucdb ./ucdb_all/T2_9_M2.ucdb ./ucdb_all/T2_9.ucdb ./ucdb_all/T3_10.ucdb ./ucdb_all/T3_11.ucdb ./ucdb_all/T3_12.ucdb ./ucdb_all/T3_13.ucdb ./ucdb_all/T3_14.ucdb ./ucdb_all/T3_15.ucdb ./ucdb_all/T3_16_M2.ucdb ./ucdb_all/T3_16.ucdb ./ucdb_all/T3_17.ucdb ./ucdb_all/T3_18_M2.ucdb ./ucdb_all/T3_18.ucdb ./ucdb_all/T3_1.ucdb ./ucdb_all/T3_2.ucdb ./ucdb_all/T3_3.ucdb ./ucdb_all/T3_4.ucdb ./ucdb_all/T3_5.ucdb ./ucdb_all/T3_6.ucdb ./ucdb_all/T3_7.ucdb ./ucdb_all/T3_8.ucdb ./ucdb_all/T3_9.ucdb ./ucdb_all/T4.ucdb ./ucdb_all/T5_MIDRST.ucdb 
+Questa Altera Starter FPGA Edition-64 vcover 2025.3 Coverage Utility 2025.09 Sep 15 2025
+Merging file ./ucdb_all/smoke.ucdb
+Merging file ./ucdb_all/T1_10_M2.ucdb
+Merging file ./ucdb_all/T1_10_S2.ucdb
+Merging file ./ucdb_all/T1_10_S3.ucdb
+Merging file ./ucdb_all/T1_10.ucdb
+Merging file ./ucdb_all/T1_11a.ucdb
+Merging file ./ucdb_all/T1_11b.ucdb
+Merging file ./ucdb_all/T1_12_M2.ucdb
+Merging file ./ucdb_all/T1_12.ucdb
+Merging file ./ucdb_all/T1_13_M2.ucdb
+Merging file ./ucdb_all/T1_13_S2.ucdb
+Merging file ./ucdb_all/T1_13_S3.ucdb
+Merging file ./ucdb_all/T1_13.ucdb
+Merging file ./ucdb_all/T1_14R_M2.ucdb
+Merging file ./ucdb_all/T1_14R_S2.ucdb
+Merging file ./ucdb_all/T1_14R_S3.ucdb
+Merging file ./ucdb_all/T1_14_R.ucdb
+Merging file ./ucdb_all/T1_14W_M2.ucdb
+Merging file ./ucdb_all/T1_14W_S2.ucdb
+Merging file ./ucdb_all/T1_14W_S3.ucdb
+Merging file ./ucdb_all/T1_14_W.ucdb
+Merging file ./ucdb_all/T1_15a.ucdb
+Merging file ./ucdb_all/T1_15b.ucdb
+Merging file ./ucdb_all/T1_16_S2.ucdb
+Merging file ./ucdb_all/T1_16_S3.ucdb
+Merging file ./ucdb_all/T1_16.ucdb
+Merging file ./ucdb_all/T1_17_S2.ucdb
+Merging file ./ucdb_all/T1_17_S3.ucdb
+Merging file ./ucdb_all/T1_17.ucdb
+Merging file ./ucdb_all/T1_18_S2.ucdb
+Merging file ./ucdb_all/T1_18_S3.ucdb
+Merging file ./ucdb_all/T1_18.ucdb
+Merging file ./ucdb_all/T1_1.ucdb
+Merging file ./ucdb_all/T1_2.ucdb
+Merging file ./ucdb_all/T1_3_M2.ucdb
+Merging file ./ucdb_all/T1_3.ucdb
+Merging file ./ucdb_all/T1_4_5_S2.ucdb
+Merging file ./ucdb_all/T1_4_5_S3.ucdb
+Merging file ./ucdb_all/T1_4_5.ucdb
+Merging file ./ucdb_all/T1_6_7.ucdb
+Merging file ./ucdb_all/T1_8_M2.ucdb
+Merging file ./ucdb_all/T1_8.ucdb
+Merging file ./ucdb_all/T1_9_M2.ucdb
+Merging file ./ucdb_all/T1_9_S2.ucdb
+Merging file ./ucdb_all/T1_9_S3.ucdb
+Merging file ./ucdb_all/T1_9.ucdb
+Merging file ./ucdb_all/T1_INCR16_M2.ucdb
+Merging file ./ucdb_all/T2_10_M2.ucdb
+Merging file ./ucdb_all/T2_10.ucdb
+Merging file ./ucdb_all/T2_11_M2.ucdb
+Merging file ./ucdb_all/T2_11.ucdb
+Merging file ./ucdb_all/T2_12.ucdb
+Merging file ./ucdb_all/T2_13.ucdb
+Merging file ./ucdb_all/T2_1_M2.ucdb
+Merging file ./ucdb_all/T2_1.ucdb
+Merging file ./ucdb_all/T2_2_M2.ucdb
+Merging file ./ucdb_all/T2_2.ucdb
+Merging file ./ucdb_all/T2_3_M2.ucdb
+Merging file ./ucdb_all/T2_3.ucdb
+Merging file ./ucdb_all/T2_4_M2.ucdb
+Merging file ./ucdb_all/T2_4.ucdb
+Merging file ./ucdb_all/T2_5_M2.ucdb
+Merging file ./ucdb_all/T2_5.ucdb
+Merging file ./ucdb_all/T2_6_M2.ucdb
+Merging file ./ucdb_all/T2_6.ucdb
+Merging file ./ucdb_all/T2_7_M2.ucdb
+Merging file ./ucdb_all/T2_7.ucdb
+Merging file ./ucdb_all/T2_8_M2.ucdb
+Merging file ./ucdb_all/T2_8.ucdb
+Merging file ./ucdb_all/T2_9_M2.ucdb
+Merging file ./ucdb_all/T2_9.ucdb
+Merging file ./ucdb_all/T3_10.ucdb
+Merging file ./ucdb_all/T3_11.ucdb
+Merging file ./ucdb_all/T3_12.ucdb
+Merging file ./ucdb_all/T3_13.ucdb
+Merging file ./ucdb_all/T3_14.ucdb
+Merging file ./ucdb_all/T3_15.ucdb
+Merging file ./ucdb_all/T3_16_M2.ucdb
+Merging file ./ucdb_all/T3_16.ucdb
+Merging file ./ucdb_all/T3_17.ucdb
+Merging file ./ucdb_all/T3_18_M2.ucdb
+Merging file ./ucdb_all/T3_18.ucdb
+Merging file ./ucdb_all/T3_1.ucdb
+Merging file ./ucdb_all/T3_2.ucdb
+Merging file ./ucdb_all/T3_3.ucdb
+Merging file ./ucdb_all/T3_4.ucdb
+Merging file ./ucdb_all/T3_5.ucdb
+Merging file ./ucdb_all/T3_6.ucdb
+Merging file ./ucdb_all/T3_7.ucdb
+Merging file ./ucdb_all/T3_8.ucdb
+Merging file ./ucdb_all/T3_9.ucdb
+Merging file ./ucdb_all/T4.ucdb
+Merging file ./ucdb_all/T5_MIDRST.ucdb
+Writing merged result to ./merged_coverage_final.ucdb
+
+End time: 14:14:29 on Jul 17,2026, Elapsed time: 0:00:02
+Errors: 0, Warnings: 0
+  -> ./merged_coverage_final.ucdb
+
+Generating reports...
+  -> Full (co ca TB):  ./coverage_summary_final.txt
+  -> RTL-only (DU):    ./coverage_rtl_only_final.txt
+
+Converting RTL-only report to PDF...
+  -> PDF: ./coverage_report_final.pdf
+
+========================================================
+ REGRESSION SUMMARY
+========================================================
+ Total tests:     93
+ PASS:            93
+ FAIL:            0
+ UCDB created:    93
+ Duration:        12m 58s
+
+ Output files:
+   ./merged_coverage_final.ucdb
+   ./coverage_summary_final.txt
+   ./coverage_rtl_only_final.txt
+   ./coverage_report_final.pdf
+
+ Logs:  ./logs_coverage/
+========================================================
+ Done — 2026-07-17 14:14:29
+========================================================

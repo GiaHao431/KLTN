@@ -1,0 +1,1197 @@
+class ahb_base_test extends uvm_test;
+`uvm_component_utils(ahb_base_test)
+ahb_env env;
+function new(string name = "ahb_base_test",
+uvm_component parent = null);
+super.new(name, parent);
+endfunction
+function void build_phase(uvm_phase phase);
+super.build_phase(phase);
+env = ahb_env::type_id::create("env", this);
+endfunction
+function void end_of_elaboration_phase(uvm_phase phase);
+super.end_of_elaboration_phase(phase);
+uvm_top.print_topology();
+endfunction
+task run_phase(uvm_phase phase);
+super.run_phase(phase);
+endtask
+endclass : ahb_base_test
+class ahb_smoke_test extends ahb_base_test;
+`uvm_component_utils(ahb_smoke_test)
+function new(string name = "ahb_smoke_test",
+uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_m3_smoke_vseq vseq;
+phase.raise_objection(this, "M3 smoke vseq");
+phase.phase_done.set_drain_time(this, 500ns);
+vseq = ahb_m3_smoke_vseq::type_id::create("smoke_vseq");
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "M3 smoke vseq done");
+endtask
+endclass : ahb_smoke_test
+class ahb_single_test extends ahb_base_test;
+`uvm_component_utils(ahb_single_test)
+function new(string name = "ahb_single_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_write_single_seq w;
+ahb_read_single_seq  r;
+string dir_s  = "WR";
+int    base_v = 32'h0000_0004;
+int    exp_v  = 0;
+phase.raise_objection(this, "single_test");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("DIR=%s",   dir_s));
+void'($value$plusargs("BASE=%h",  base_v));
+void'($value$plusargs("EXP_INIT=%h", exp_v));
+begin int unsigned m_sel = 1; void'($value$plusargs("MASTER=%d", m_sel));
+`uvm_info("CFG", $sformatf("single_test: DIR=%s BASE=0x%08h EXP_INIT=0x%08h MASTER=%0d",
+dir_s, base_v, exp_v, m_sel), UVM_LOW) end
+#200ns;
+case (dir_s)
+"W" : begin
+w = ahb_write_single_seq::type_id::create("w");
+w.addr  = base_v;
+w.wdata = 32'hDEAD_BEEF;
+w.start(env.v_seqr.mst_seqr());
+end
+"R" : begin
+r = ahb_read_single_seq::type_id::create("r");
+r.addr = base_v;
+r.start(env.v_seqr.mst_seqr());
+if (exp_v != 0 && r.rdata !== exp_v[31:0])
+`uvm_error("T1_RD",
+$sformatf("initial mismatch exp=0x%08h got=0x%08h", exp_v, r.rdata))
+else
+`uvm_info("T1_RD", $sformatf("rdata=0x%08h OK", r.rdata), UVM_LOW)
+end
+"WR" : begin
+w = ahb_write_single_seq::type_id::create("w");
+w.addr  = base_v;
+w.wdata = 32'hCAFE_BABE;
+w.start(env.v_seqr.mst_seqr());
+#50ns;
+r = ahb_read_single_seq::type_id::create("r");
+r.addr = base_v;
+r.start(env.v_seqr.mst_seqr());
+if (r.rdata !== 32'hCAFE_BABE)
+`uvm_error("T1_WR", $sformatf("WR mismatch exp=0xCAFEBABE got=0x%08h", r.rdata))
+else
+`uvm_info("T1_WR", "write-read-back OK", UVM_LOW)
+end
+default : `uvm_error("CFG", $sformatf("unknown DIR='%s'", dir_s))
+endcase
+#200ns;
+phase.drop_objection(this, "single_test done");
+endtask
+endclass : ahb_single_test
+class ahb_burst_test extends ahb_base_test;
+`uvm_component_utils(ahb_burst_test)
+function new(string name = "ahb_burst_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+function logic [2:0] parse_burst(string s);
+case (s)
+"SINGLE" : return B_SINGLE;
+"INCR"   : return B_INCR;
+"WRAP4"  : return B_WRAP4;
+"INCR4"  : return B_INCR4;
+"WRAP8"  : return B_WRAP8;
+"INCR8"  : return B_INCR8;
+"WRAP16" : return B_WRAP16;
+"INCR16" : return B_INCR16;
+default  : begin
+`uvm_warning("CFG", $sformatf("unknown BURST '%s', default INCR4", s))
+return B_INCR4;
+end
+endcase
+endfunction
+function burst_pat_e parse_pattern(string s);
+case (s)
+"DEAD"  : return PAT_DEAD;
+"INDEX" : return PAT_INDEX;
+"RAND"  : return PAT_RAND;
+default : return PAT_DEAD;
+endcase
+endfunction
+task run_phase(uvm_phase phase);
+ahb_burst_writeread_vseq vseq;
+string  burst_s   = "INCR4";
+string  dir_s     = "WR";
+string  pat_s     = "DEAD";
+int     base_v    = 32'h0000_0010;
+phase.raise_objection(this, "burst_test");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("BURST=%s",   burst_s));
+void'($value$plusargs("DIR=%s",     dir_s));
+void'($value$plusargs("BASE=%h",    base_v));
+void'($value$plusargs("PATTERN=%s", pat_s));
+`uvm_info("CFG", $sformatf("burst_test: BURST=%s DIR=%s BASE=0x%08h PAT=%s",
+burst_s, dir_s, base_v, pat_s), UVM_LOW)
+#200ns;
+vseq = ahb_burst_writeread_vseq::type_id::create("vseq");
+vseq.base_addr  = base_v;
+vseq.burst_type = parse_burst(burst_s);
+vseq.pattern    = parse_pattern(pat_s);
+case (dir_s)
+"W"  : begin vseq.do_write = 1; vseq.do_read = 0; end
+"R"  : begin vseq.do_write = 0; vseq.do_read = 1; end
+"WR" : begin vseq.do_write = 1; vseq.do_read = 1; end
+default : begin
+`uvm_warning("CFG", $sformatf("unknown DIR '%s', default WR", dir_s))
+vseq.do_write = 1; vseq.do_read = 1;
+end
+endcase
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "burst_test done");
+endtask
+endclass : ahb_burst_test
+class ahb_force_test extends ahb_base_test;
+`uvm_component_utils(ahb_force_test)
+function new(string name = "ahb_force_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+function int decode_sid(logic [31:0] a);
+case (a[31:30])
+2'b00:   return 1;
+2'b01:   return 2;
+2'b10:   return 3;
+default: return 1;
+endcase
+endfunction
+task run_phase(uvm_phase phase);
+ahb_force_single_vseq vseq;
+string op_s   = "SPLIT";
+string dir_s  = "R";
+int    base_v = 32'h0000_0040;
+int    lock_v = 0;
+phase.raise_objection(this, "force_test");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("OP=%s",   op_s));
+void'($value$plusargs("DIR=%s",  dir_s));
+void'($value$plusargs("BASE=%h", base_v));
+void'($value$plusargs("LOCK=%d", lock_v));
+`uvm_info("CFG",
+$sformatf("force_test: OP=%s DIR=%s BASE=0x%08h LOCK=%0d",
+op_s, dir_s, base_v, lock_v), UVM_LOW)
+#200ns;
+vseq = ahb_force_single_vseq::type_id::create("vseq");
+vseq.slave_id  = decode_sid(base_v);
+vseq.op_split  = (op_s == "SPLIT" || op_s == "BOTH");
+vseq.op_retry  = (op_s == "RETRY" || op_s == "BOTH");
+vseq.is_write  = (dir_s == "W");
+vseq.base_addr = base_v;
+vseq.lock      = (lock_v != 0);
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "force_test done");
+endtask
+endclass : ahb_force_test
+class ahb_back2back_test extends ahb_base_test;
+`uvm_component_utils(ahb_back2back_test)
+function new(string name = "ahb_back2back_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_write_single_seq w1, w2;
+ahb_read_single_seq  r1, r2;
+phase.raise_objection(this, "back2back");
+phase.phase_done.set_drain_time(this, 500ns);
+#200ns;
+w1 = ahb_write_single_seq::type_id::create("w1");
+w1.addr = 32'h0000_0030; w1.wdata = 32'hCAFE_0001;
+w1.start(env.v_seqr.mst_seqr());
+w2 = ahb_write_single_seq::type_id::create("w2");
+w2.addr = 32'h0000_0034; w2.wdata = 32'hCAFE_0002;
+w2.start(env.v_seqr.mst_seqr());
+r1 = ahb_read_single_seq::type_id::create("r1");
+r1.addr = 32'h0000_0030;
+r1.start(env.v_seqr.mst_seqr());
+if (r1.rdata !== 32'hCAFE_0001)
+`uvm_error("T1_12",
+$sformatf("word12 exp=0xCAFE0001 got=0x%08h", r1.rdata))
+r2 = ahb_read_single_seq::type_id::create("r2");
+r2.addr = 32'h0000_0034;
+r2.start(env.v_seqr.mst_seqr());
+if (r2.rdata !== 32'hCAFE_0002)
+`uvm_error("T1_12",
+$sformatf("word13 exp=0xCAFE0002 got=0x%08h", r2.rdata))
+else
+`uvm_info("T1_12", "back-to-back writes verified (both words OK)", UVM_LOW)
+#200ns;
+phase.drop_objection(this, "back2back done");
+endtask
+endclass : ahb_back2back_test
+class ahb_retry_until_ok_test extends ahb_base_test;
+`uvm_component_utils(ahb_retry_until_ok_test)
+function new(string name = "ahb_retry_until_ok_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+function int decode_sid(logic [31:0] a);
+case (a[31:30])
+2'b00:   return 1;
+2'b01:   return 2;
+2'b10:   return 3;
+default: return 1;
+endcase
+endfunction
+task run_phase(uvm_phase phase);
+ahb_retry_recover_vseq vseq;
+string dir_s   = "R";
+int    base_v  = 32'h0000_0040;
+int    nretry  = 2;
+phase.raise_objection(this, "retry_until_ok");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("DIR=%s",    dir_s));
+void'($value$plusargs("BASE=%h",   base_v));
+void'($value$plusargs("NRETRY=%d", nretry));
+`uvm_info("CFG",
+$sformatf("retry_until_ok: DIR=%s BASE=0x%08h NRETRY=%0d",
+dir_s, base_v, nretry), UVM_LOW)
+#200ns;
+vseq = ahb_retry_recover_vseq::type_id::create("vseq");
+vseq.slave_id  = decode_sid(base_v);
+vseq.is_write  = (dir_s == "W");
+vseq.base_addr = base_v;
+vseq.num_retry = nretry;
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "retry_until_ok done");
+endtask
+endclass : ahb_retry_until_ok_test
+class ahb_force_burst_test extends ahb_base_test;
+`uvm_component_utils(ahb_force_burst_test)
+function new(string name = "ahb_force_burst_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+function int decode_sid(logic [31:0] a);
+case (a[31:30])
+2'b00:   return 1;
+2'b01:   return 2;
+2'b10:   return 3;
+default: return 1;
+endcase
+endfunction
+function logic [2:0] parse_burst(string s);
+case (s)
+"INCR"   : return B_INCR;
+"WRAP4"  : return B_WRAP4;
+"INCR4"  : return B_INCR4;
+"WRAP8"  : return B_WRAP8;
+"INCR8"  : return B_INCR8;
+"WRAP16" : return B_WRAP16;
+"INCR16" : return B_INCR16;
+default  : return B_INCR4;
+endcase
+endfunction
+task run_phase(uvm_phase phase);
+ahb_force_burst_vseq vseq;
+string burst_s   = "INCR4";
+string dir_s     = "W";
+string op_s      = "SPLIT";
+int    base_v    = 32'h0000_0040;
+int    beat_v    = 2;
+int    recover_v = 0;
+phase.raise_objection(this, "force_burst");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("BURST=%s",   burst_s));
+void'($value$plusargs("DIR=%s",     dir_s));
+void'($value$plusargs("OP=%s",      op_s));
+void'($value$plusargs("BASE=%h",    base_v));
+void'($value$plusargs("BEAT=%d",    beat_v));
+void'($value$plusargs("RECOVER=%d", recover_v));
+`uvm_info("CFG",
+$sformatf("force_burst: BURST=%s DIR=%s OP=%s BASE=0x%08h BEAT=%0d RECOVER=%0d",
+burst_s, dir_s, op_s, base_v, beat_v, recover_v), UVM_LOW)
+#200ns;
+vseq = ahb_force_burst_vseq::type_id::create("vseq");
+vseq.slave_id     = decode_sid(base_v);
+vseq.op_split     = (op_s == "SPLIT");
+vseq.op_retry     = (op_s == "RETRY");
+vseq.is_write     = (dir_s == "W");
+vseq.beat_index   = beat_v;
+vseq.base_addr    = base_v;
+vseq.burst_type   = parse_burst(burst_s);
+vseq.max_attempts = (recover_v != 0) ? 2 : 1;
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "force_burst done");
+endtask
+endclass : ahb_force_burst_test
+class ahb_l2_grant_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_grant_test)
+function new(string name = "ahb_l2_grant_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_grant_vseq vseq;
+int base_v = 32'h0000_0010;
+phase.raise_objection(this, "l2_grant");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("BASE=%h", base_v));
+`uvm_info("CFG", $sformatf("l2_grant: BASE=0x%08h", base_v), UVM_LOW)
+#200ns;
+vseq = ahb_l2_grant_vseq::type_id::create("vseq");
+vseq.base_addr = base_v;
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_grant done");
+endtask
+endclass : ahb_l2_grant_test
+class ahb_l2_wr_rd_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_wr_rd_test)
+function new(string name = "ahb_l2_wr_rd_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_wr_rd_vseq vseq;
+int base_v  = 32'h0000_0010;
+int wdata_v = 32'h5A5A_0010;
+phase.raise_objection(this, "l2_wr_rd");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("BASE=%h",  base_v));
+void'($value$plusargs("WDATA=%h", wdata_v));
+`uvm_info("CFG", $sformatf("l2_wr_rd: BASE=0x%08h WDATA=0x%08h",
+base_v, wdata_v), UVM_LOW)
+#200ns;
+vseq = ahb_l2_wr_rd_vseq::type_id::create("vseq");
+vseq.base_addr = base_v;
+vseq.wdata     = wdata_v;
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_wr_rd done");
+endtask
+endclass : ahb_l2_wr_rd_test
+class ahb_l2_decoder_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_decoder_test)
+function new(string name = "ahb_l2_decoder_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_decoder_sweep_vseq vseq;
+phase.raise_objection(this, "l2_decoder");
+phase.phase_done.set_drain_time(this, 500ns);
+#200ns;
+vseq = ahb_l2_decoder_sweep_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_decoder done");
+endtask
+endclass : ahb_l2_decoder_test
+class ahb_l2_default_err_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_default_err_test)
+function new(string name = "ahb_l2_default_err_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_default_err_vseq vseq;
+phase.raise_objection(this, "l2_default_err");
+phase.phase_done.set_drain_time(this, 500ns);
+#200ns;
+vseq = ahb_l2_default_err_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_default_err done");
+endtask
+endclass : ahb_l2_default_err_test
+class ahb_l2_boundary_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_boundary_test)
+function new(string name = "ahb_l2_boundary_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_boundary_vseq vseq;
+phase.raise_objection(this, "l2_boundary");
+phase.phase_done.set_drain_time(this, 500ns);
+#200ns;
+vseq = ahb_l2_boundary_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_boundary done");
+endtask
+endclass : ahb_l2_boundary_test
+class ahb_l2_cross_raw_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_cross_raw_test)
+function new(string name = "ahb_l2_cross_raw_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_cross_raw_vseq vseq;
+phase.raise_objection(this, "l2_cross_raw");
+phase.phase_done.set_drain_time(this, 500ns);
+#200ns;
+vseq = ahb_l2_cross_raw_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_cross_raw done");
+endtask
+endclass : ahb_l2_cross_raw_test
+class ahb_l2_burst_intc_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_burst_intc_test)
+function new(string name = "ahb_l2_burst_intc_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_burst_intc_vseq vseq;
+phase.raise_objection(this, "l2_burst_intc");
+phase.phase_done.set_drain_time(this, 500ns);
+#200ns;
+vseq = ahb_l2_burst_intc_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_burst_intc done");
+endtask
+endclass : ahb_l2_burst_intc_test
+class ahb_l2_slave_sweep_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_slave_sweep_test)
+function new(string name = "ahb_l2_slave_sweep_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_slave_sweep_vseq vseq;
+phase.raise_objection(this, "l2_slave_sweep");
+phase.phase_done.set_drain_time(this, 500ns);
+#200ns;
+vseq = ahb_l2_slave_sweep_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_slave_sweep done");
+endtask
+endclass : ahb_l2_slave_sweep_test
+class ahb_l2_hready_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_hready_test)
+function new(string name = "ahb_l2_hready_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_hready_vseq vseq;
+int base_v  = 32'h0000_0020;
+int wdata_v = 32'h1234_ABCD;
+phase.raise_objection(this, "l2_hready");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("BASE=%h",  base_v));
+void'($value$plusargs("WDATA=%h", wdata_v));
+`uvm_info("CFG", $sformatf("l2_hready: BASE=0x%08h WDATA=0x%08h",
+base_v, wdata_v), UVM_LOW)
+#200ns;
+vseq = ahb_l2_hready_vseq::type_id::create("vseq");
+vseq.base_addr = base_v;
+vseq.wdata     = wdata_v;
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_hready done");
+endtask
+endclass : ahb_l2_hready_test
+class ahb_l2_split_recover_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_split_recover_test)
+function new(string name = "ahb_l2_split_recover_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+function int decode_sid(logic [31:0] a);
+case (a[31:30]) 2'b00:return 1; 2'b01:return 2; 2'b10:return 3; default:return 1; endcase
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_split_recover_vseq vseq;
+int base_v = 32'h0000_0000;
+phase.raise_objection(this, "l2_split_recover");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("BASE=%h", base_v));
+`uvm_info("CFG", $sformatf("l2_split_recover: BASE=0x%08h", base_v), UVM_LOW)
+#200ns;
+vseq = ahb_l2_split_recover_vseq::type_id::create("vseq");
+vseq.slave_id  = decode_sid(base_v);
+vseq.base_addr = base_v;
+vseq.exp_rdata = (base_v == 32'h0000_0000) ? 32'h0000_000A : vseq.exp_rdata;
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_split_recover done");
+endtask
+endclass : ahb_l2_split_recover_test
+class ahb_l2_idle_intc_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_idle_intc_test)
+function new(string name = "ahb_l2_idle_intc_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_idle_intc_vseq vseq;
+int hold_v = 3;
+phase.raise_objection(this, "l2_idle_intc");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("HOLD=%d", hold_v));
+`uvm_info("CFG", $sformatf("l2_idle_intc: HOLD=%0d", hold_v), UVM_LOW)
+#200ns;
+vseq = ahb_l2_idle_intc_vseq::type_id::create("vseq");
+vseq.hold = hold_v;
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_idle_intc done");
+endtask
+endclass : ahb_l2_idle_intc_test
+class ahb_l2_retry_intc_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_retry_intc_test)
+function new(string name = "ahb_l2_retry_intc_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+function int decode_sid(logic [31:0] a);
+case (a[31:30]) 2'b00:return 1; 2'b01:return 2; 2'b10:return 3; default:return 1; endcase
+endfunction
+task run_phase(uvm_phase phase);
+ahb_retry_recover_vseq vseq;
+int base_v  = 32'h0000_0050;
+int nretry  = 2;
+int wdata_v = 32'hCAFE_1250;
+phase.raise_objection(this, "l2_retry_intc");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("BASE=%h",   base_v));
+void'($value$plusargs("NRETRY=%d", nretry));
+void'($value$plusargs("WDATA=%h",  wdata_v));
+`uvm_info("CFG",
+$sformatf("l2_retry_intc: BASE=0x%08h NRETRY=%0d WDATA=0x%08h",
+base_v, nretry, wdata_v), UVM_LOW)
+#200ns;
+vseq = ahb_retry_recover_vseq::type_id::create("vseq");
+vseq.slave_id  = decode_sid(base_v);
+vseq.is_write  = 1'b1;
+vseq.base_addr = base_v;
+vseq.wr_data   = wdata_v;
+vseq.num_retry = nretry;
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_retry_intc done");
+endtask
+endclass : ahb_l2_retry_intc_test
+class ahb_l2_both_idle_test extends ahb_base_test;
+`uvm_component_utils(ahb_l2_both_idle_test)
+function new(string name = "ahb_l2_both_idle_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l2_both_idle_vseq vseq;
+int m1h = 10;
+int m2h = 4;
+phase.raise_objection(this, "l2_both_idle");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("M1HOLD=%d", m1h));
+void'($value$plusargs("M2HOLD=%d", m2h));
+`uvm_info("CFG", $sformatf("l2_both_idle: M1HOLD=%0d M2HOLD=%0d", m1h, m2h), UVM_LOW)
+#200ns;
+vseq = ahb_l2_both_idle_vseq::type_id::create("vseq");
+vseq.m1_hold = m1h;
+vseq.m2_hold = m2h;
+vseq.start(env.v_seqr);
+#200ns;
+phase.drop_objection(this, "l2_both_idle done");
+endtask
+endclass : ahb_l2_both_idle_test
+class ahb_l3_round_robin_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_round_robin_test)
+function new(string name = "ahb_l3_round_robin_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_round_robin_vseq vseq;
+int rounds_v = 2;
+int unsigned g2_0, g1_0, lk_0, wt_0;
+phase.raise_objection(this, "l3_round_robin");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("ROUNDS=%d", rounds_v));
+`uvm_info("CFG", $sformatf("l3_round_robin: ROUNDS=%0d", rounds_v), UVM_LOW)
+#200ns;
+g2_0 = env.bus_mon_agent.mon.n_grant_to_m2;
+g1_0 = env.bus_mon_agent.mon.n_grant_to_m1;
+lk_0 = env.bus_mon_agent.mon.n_master_chg_under_lock;
+wt_0 = env.bus_mon_agent.mon.n_master_chg_on_wait;
+vseq = ahb_l3_round_robin_vseq::type_id::create("vseq");
+vseq.rounds = rounds_v;
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_1", "grant KHONG he chuyen M1->M2 (khong alternation)")
+if (env.bus_mon_agent.mon.n_grant_to_m1 - g1_0 == 0)
+`uvm_error("T3_1", "grant KHONG he tra ve M1 (M1 bi starvation?)")
+if (env.bus_mon_agent.mon.n_master_chg_under_lock - lk_0 != 0)
+`uvm_error("T3_1", "HMASTER doi khi dang lock (vi pham §3.11.5)")
+if (env.bus_mon_agent.mon.n_master_chg_on_wait - wt_0 != 0)
+`uvm_error("T3_1", "HMASTER doi giua wait-state (handover sai bien HREADY)")
+`uvm_info("T3_1",
+$sformatf("alternation OK: M1->M2 x%0d, ve M1 x%0d",
+env.bus_mon_agent.mon.n_grant_to_m2 - g2_0,
+env.bus_mon_agent.mon.n_grant_to_m1 - g1_0), UVM_LOW)
+phase.drop_objection(this, "l3_round_robin done");
+endtask
+endclass : ahb_l3_round_robin_test
+class ahb_l3_m2_only_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_m2_only_test)
+function new(string name = "ahb_l3_m2_only_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_m2_only_vseq vseq;
+int base_v  = 32'h8000_0110;
+int wdata_v = 32'h32B2_0002;
+int unsigned g2_0;
+phase.raise_objection(this, "l3_m2_only");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("BASE=%h",  base_v));
+void'($value$plusargs("WDATA=%h", wdata_v));
+`uvm_info("CFG", $sformatf("l3_m2_only: BASE=0x%08h WDATA=0x%08h",
+base_v, wdata_v), UVM_LOW)
+#200ns;
+g2_0 = env.bus_mon_agent.mon.n_grant_to_m2;
+vseq = ahb_l3_m2_only_vseq::type_id::create("vseq");
+vseq.base_addr = base_v;
+vseq.wdata     = wdata_v;
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_2", "HMASTER khong he doi 0->1 (M2 chua duoc grant?)")
+else
+`uvm_info("T3_2", "IDLE -> GNT_M2 truc tiep, HMASTER=1 OK", UVM_LOW)
+phase.drop_objection(this, "l3_m2_only done");
+endtask
+endclass : ahb_l3_m2_only_test
+class ahb_l3_handover_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_handover_test)
+function new(string name = "ahb_l3_handover_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_handover_vseq vseq;
+int unsigned g2_0, lk_0, wt_0;
+phase.raise_objection(this, "l3_handover");
+phase.phase_done.set_drain_time(this, 500ns);
+`uvm_info("CFG", "l3_handover: M1&M2 dong thoi (khong delay ns)", UVM_LOW)
+#200ns;
+g2_0 = env.bus_mon_agent.mon.n_grant_to_m2;
+lk_0 = env.bus_mon_agent.mon.n_master_chg_under_lock;
+wt_0 = env.bus_mon_agent.mon.n_master_chg_on_wait;
+vseq = ahb_l3_handover_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_3", "khong quan sat thay handover M1->M2")
+if (env.bus_mon_agent.mon.n_master_chg_on_wait - wt_0 != 0)
+`uvm_error("T3_3", "HMASTER doi giua wait-state (handover sai bien)")
+if (env.bus_mon_agent.mon.n_master_chg_under_lock - lk_0 != 0)
+`uvm_error("T3_3", "HMASTER doi khi dang lock")
+phase.drop_objection(this, "l3_handover done");
+endtask
+endclass : ahb_l3_handover_test
+class ahb_l3_handover_wait_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_handover_wait_test)
+function new(string name = "ahb_l3_handover_wait_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_handover_vseq vseq;
+int unsigned g2_0, wt_0, wc_0;
+phase.raise_objection(this, "l3_handover_wait");
+phase.phase_done.set_drain_time(this, 500ns);
+`uvm_info("CFG", "l3_handover_wait: M1&M2 dong thoi (khong delay ns)", UVM_LOW)
+#200ns;
+g2_0 = env.bus_mon_agent.mon.n_grant_to_m2;
+wt_0 = env.bus_mon_agent.mon.n_master_chg_on_wait;
+wc_0 = env.bus_mon_agent.mon.n_wait_cycles;
+vseq = ahb_l3_handover_vseq::type_id::create("vseq");
+vseq.m1_addr = 32'h0000_0124; vseq.m1_data = 32'hA1DE_0011;
+vseq.m2_addr = 32'h4000_0124; vseq.m2_data = 32'hB2DE_0012;
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_wait_cycles - wc_0 == 0)
+`uvm_error("T3_4", "khong co wait-state nao trong cua so quan sat (kich ban sai?)")
+if (env.bus_mon_agent.mon.n_master_chg_on_wait - wt_0 != 0)
+`uvm_error("T3_4", "HGRANT/HMASTER doi TRONG wait-state — vi pham")
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_4", "khong quan sat thay handover sau wait-state")
+else
+`uvm_info("T3_4",
+$sformatf("wait cycles=%0d, handover chi tren bien HREADY=1 OK",
+env.bus_mon_agent.mon.n_wait_cycles - wc_0), UVM_LOW)
+phase.drop_objection(this, "l3_handover_wait done");
+endtask
+endclass : ahb_l3_handover_wait_test
+class ahb_l3_idle_force_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_idle_force_test)
+function new(string name = "ahb_l3_idle_force_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_idle_force_vseq vseq;
+int m1h_v = 12;
+int unsigned g2_0;
+phase.raise_objection(this, "l3_idle_force");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("M1HOLD=%d", m1h_v));
+`uvm_info("CFG", $sformatf("l3_idle_force: M1HOLD=%0d chu ky (khong con M2DLY ns)",
+m1h_v), UVM_LOW)
+#200ns;
+g2_0 = env.bus_mon_agent.mon.n_grant_to_m2;
+vseq = ahb_l3_idle_force_vseq::type_id::create("vseq");
+vseq.m1_hold = m1h_v;
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_7", "idle_force_switch KHONG fire (grant khong sang M2)")
+else
+`uvm_info("T3_7", "idle_force_switch fire, M2 transfer OK", UVM_LOW)
+phase.drop_objection(this, "l3_idle_force done");
+endtask
+endclass : ahb_l3_idle_force_test
+class ahb_l3_err_recovery_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_err_recovery_test)
+function new(string name = "ahb_l3_err_recovery_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_err_recovery_vseq vseq;
+int unsigned g2_0;
+phase.raise_objection(this, "l3_err_recovery");
+phase.phase_done.set_drain_time(this, 500ns);
+#200ns;
+g2_0 = env.bus_mon_agent.mon.n_grant_to_m2;
+vseq = ahb_l3_err_recovery_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_13", "M2 khong he duoc grant sau ERROR cua M1")
+phase.drop_objection(this, "l3_err_recovery done");
+endtask
+endclass : ahb_l3_err_recovery_test
+class ahb_l3_locked_burst_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_locked_burst_test)
+function new(string name = "ahb_l3_locked_burst_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_locked_burst_vseq vseq;
+int unsigned lk_0, g2_0, hs0_0, m2ng_0;
+phase.raise_objection(this, "l3_locked_burst");
+phase.phase_done.set_drain_time(this, 500ns);
+`uvm_info("CFG", "l3_locked_burst: M1 locked INCR4 + M2 request; PhaB them force SPLIT",
+UVM_LOW)
+#200ns;
+lk_0   = env.bus_mon_agent.mon.n_lock_cycles;
+g2_0   = env.bus_mon_agent.mon.n_grant_to_m2;
+hs0_0  = env.bus_mon_agent.mon.n_hsplit_bit0_pulse;
+m2ng_0 = env.m2_agent.mon.n_req_nogrant_cycles;
+vseq = ahb_l3_locked_burst_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_lock_cycles - lk_0 < 4)
+`uvm_error("T3_5",
+$sformatf("HMASTLOCK khong giu du lau suot burst (dn_lock=%0d < 4) — cond 1",
+env.bus_mon_agent.mon.n_lock_cycles - lk_0))
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_5", "M2 khong duoc grant sau khi HLOCK nha (cond 3)")
+if (env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0 != 0)
+`uvm_error("T3_5",
+"co xung HSPLIT cho M1 khi dang lock — SPLIT khong bi suppress (cond 4)")
+if (env.m2_agent.mon.n_req_nogrant_cycles - m2ng_0 == 0)
+`uvm_error("T3_5",
+"M2 khong he cho bus — kich ban khong tao tranh chap that duoi lock")
+`uvm_info("T3_5",
+$sformatf("lock cycles=%0d, M2 cho=%0d chu ky, grant->M2=%0d, HSPLIT(M1)=%0d",
+env.bus_mon_agent.mon.n_lock_cycles - lk_0,
+env.m2_agent.mon.n_req_nogrant_cycles - m2ng_0,
+env.bus_mon_agent.mon.n_grant_to_m2 - g2_0,
+env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0), UVM_LOW)
+phase.drop_objection(this, "l3_locked_burst done");
+endtask
+endclass : ahb_l3_locked_burst_test
+class ahb_l3_burst_active_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_burst_active_test)
+function new(string name = "ahb_l3_burst_active_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_burst_active_vseq vseq;
+int unsigned g2_0, wt_0, m2ng_0;
+phase.raise_objection(this, "l3_burst_active");
+phase.phase_done.set_drain_time(this, 500ns);
+`uvm_info("CFG", "l3_burst_active: M1 INCR4 unlocked, M2 xin bus giua burst", UVM_LOW)
+#200ns;
+g2_0   = env.bus_mon_agent.mon.n_grant_to_m2;
+wt_0   = env.bus_mon_agent.mon.n_master_chg_on_wait;
+m2ng_0 = env.m2_agent.mon.n_req_nogrant_cycles;
+vseq = ahb_l3_burst_active_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_master_chg_on_wait - wt_0 != 0)
+`uvm_error("T3_6",
+"HMASTER doi giua wait-state — burst bi cat sai bien HREADY (cond 1)")
+if (env.m2_agent.mon.n_req_nogrant_cycles - m2ng_0 == 0)
+`uvm_error("T3_6",
+"M2 khong cho bus — burst_active khong giu M1 (M2 chen giua burst?) (cond 1)")
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_6", "M2 khong duoc grant sau beat cuoi (cond 3)")
+else
+`uvm_info("T3_6",
+$sformatf("burst giu M1, M2 cho=%0d chu ky roi nhan bus (grant->M2=%0d)",
+env.m2_agent.mon.n_req_nogrant_cycles - m2ng_0,
+env.bus_mon_agent.mon.n_grant_to_m2 - g2_0), UVM_LOW)
+phase.drop_objection(this, "l3_burst_active done");
+endtask
+endclass : ahb_l3_burst_active_test
+class ahb_l3_mux_pipeline_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_mux_pipeline_test)
+function new(string name = "ahb_l3_mux_pipeline_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_mux_pipeline_vseq vseq;
+int unsigned g2_0, wt_0;
+phase.raise_objection(this, "l3_mux_pipeline");
+phase.phase_done.set_drain_time(this, 500ns);
+`uvm_info("CFG", "l3_mux_pipeline: handover M1<->M2, kiem addr/write/read mux", UVM_LOW)
+#200ns;
+g2_0 = env.bus_mon_agent.mon.n_grant_to_m2;
+wt_0 = env.bus_mon_agent.mon.n_master_chg_on_wait;
+vseq = ahb_l3_mux_pipeline_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_11", "khong quan sat thay handover M1->M2 (chua switch mux?)")
+if (env.bus_mon_agent.mon.n_master_chg_on_wait - wt_0 != 0)
+`uvm_error("T3_11",
+"mux switch khong dong bo tren bien HREADY=1 (dn_master_chg_on_wait != 0)")
+else
+`uvm_info("T3_11",
+"3 duong mux OK: routing dung (scoreboard), khong tron write, khong swap read",
+UVM_LOW)
+phase.drop_objection(this, "l3_mux_pipeline done");
+endtask
+endclass : ahb_l3_mux_pipeline_test
+class ahb_l3_data_isolation_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_data_isolation_test)
+function new(string name = "ahb_l3_data_isolation_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_data_isolation_vseq vseq;
+int unsigned g2_0, g1_0;
+phase.raise_objection(this, "l3_data_isolation");
+phase.phase_done.set_drain_time(this, 500ns);
+`uvm_info("CFG", "l3_data_isolation: PhaA khac slave, PhaB cung slave doc cheo", UVM_LOW)
+#200ns;
+g2_0 = env.bus_mon_agent.mon.n_grant_to_m2;
+g1_0 = env.bus_mon_agent.mon.n_grant_to_m1;
+vseq = ahb_l3_data_isolation_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_12", "khong thay grant M1->M2 (hai master khong that su xen ke)")
+if (env.bus_mon_agent.mon.n_grant_to_m1 - g1_0 == 0)
+`uvm_error("T3_12", "khong thay grant tra ve M1 (khong luan phien 2 chieu)")
+`uvm_info("T3_12",
+$sformatf("isolation OK: grant M1->M2 x%0d, ve M1 x%0d; du lieu 2 master khong nhiem",
+env.bus_mon_agent.mon.n_grant_to_m2 - g2_0,
+env.bus_mon_agent.mon.n_grant_to_m1 - g1_0), UVM_LOW)
+phase.drop_objection(this, "l3_data_isolation done");
+endtask
+endclass : ahb_l3_data_isolation_test
+class ahb_l3_alt_stress_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_alt_stress_test)
+function new(string name = "ahb_l3_alt_stress_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_alt_stress_vseq vseq;
+int rounds_v = 8;
+int unsigned g2_0, g1_0, lk_0, wt_0;
+phase.raise_objection(this, "l3_alt_stress");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("ROUNDS=%d", rounds_v));
+`uvm_info("CFG", $sformatf("l3_alt_stress: ROUNDS=%0d", rounds_v), UVM_LOW)
+#200ns;
+g2_0 = env.bus_mon_agent.mon.n_grant_to_m2;
+g1_0 = env.bus_mon_agent.mon.n_grant_to_m1;
+lk_0 = env.bus_mon_agent.mon.n_master_chg_under_lock;
+wt_0 = env.bus_mon_agent.mon.n_master_chg_on_wait;
+vseq = ahb_l3_alt_stress_vseq::type_id::create("vseq");
+vseq.rounds = rounds_v;
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_15", "grant khong he sang M2 (khong luan phien)")
+if (env.bus_mon_agent.mon.n_grant_to_m1 - g1_0 == 0)
+`uvm_error("T3_15", "grant khong he ve M1 (M1 bi starvation?)")
+if (env.bus_mon_agent.mon.n_master_chg_under_lock - lk_0 != 0)
+`uvm_error("T3_15", "HMASTER doi khi dang lock (khong duoc co lock o T3.15)")
+if (env.bus_mon_agent.mon.n_master_chg_on_wait - wt_0 != 0)
+`uvm_error("T3_15", "HMASTER doi giua wait-state (handover sai bien)")
+`uvm_info("T3_15",
+$sformatf("stress OK: grant M1->M2 x%0d, ve M1 x%0d qua %0d vong",
+env.bus_mon_agent.mon.n_grant_to_m2 - g2_0,
+env.bus_mon_agent.mon.n_grant_to_m1 - g1_0, rounds_v), UVM_LOW)
+phase.drop_objection(this, "l3_alt_stress done");
+endtask
+endclass : ahb_l3_alt_stress_test
+class ahb_l3_split_switch_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_split_switch_test)
+function new(string name = "ahb_l3_split_switch_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_split_switch_vseq vseq;
+int unsigned hs0_0, g2_0, m1ng_0;
+phase.raise_objection(this, "l3_split_switch");
+phase.phase_done.set_drain_time(this, 500ns);
+`uvm_info("CFG", "l3_split_switch: M1 SPLIT@S1 -> nhuong M2 -> unmask -> M1 OK", UVM_LOW)
+#200ns;
+hs0_0  = env.bus_mon_agent.mon.n_hsplit_bit0_pulse;
+g2_0   = env.bus_mon_agent.mon.n_grant_to_m2;
+m1ng_0 = env.m1_agent.mon.n_req_nogrant_cycles;
+vseq = ahb_l3_split_switch_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+if (env.m1_agent.mon.n_req_nogrant_cycles - m1ng_0 == 0)
+`uvm_error("T3_8", "M1 KHONG bi chan sau SPLIT — khong bi mask (cond 1)")
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_8", "M2 KHONG duoc grant khi M1 bi mask (cond 2)")
+if (env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0 == 0)
+`uvm_error("T3_8", "Khong co xung HSPLIT[0] — M1 khong duoc unmask (cond 3)")
+`uvm_info("T3_8",
+$sformatf("M1 nogrant=%0d, grant->M2=%0d, HSPLIT[0]=%0d",
+env.m1_agent.mon.n_req_nogrant_cycles - m1ng_0,
+env.bus_mon_agent.mon.n_grant_to_m2 - g2_0,
+env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0), UVM_LOW)
+phase.drop_objection(this, "l3_split_switch done");
+endtask
+endclass : ahb_l3_split_switch_test
+class ahb_l3_split_or_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_split_or_test)
+function new(string name = "ahb_l3_split_or_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_split_or_vseq vseq;
+int unsigned hs0_0, hs1_0;
+phase.raise_objection(this, "l3_split_or");
+phase.phase_done.set_drain_time(this, 200ns);
+`uvm_info("CFG", "l3_split_or: S1 split->bit0(M1), S2 split->bit1(M2)", UVM_LOW)
+#100ns;
+hs0_0 = env.bus_mon_agent.mon.n_hsplit_bit0_pulse;
+hs1_0 = env.bus_mon_agent.mon.n_hsplit_bit1_pulse;
+vseq = ahb_l3_split_or_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#100ns;
+if (env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0 == 0)
+`uvm_error("T3_9", "S1 split khong lam bit0 phat — anh xa bit0=M1 sai (cond 2)")
+if (env.bus_mon_agent.mon.n_hsplit_bit1_pulse - hs1_0 == 0)
+`uvm_error("T3_9", "S2 split khong lam bit1 phat — anh xa bit1=M2 sai (cond 2)")
+`uvm_info("T3_9",
+$sformatf("HSPLIT[0]=%0d (M1), HSPLIT[1]=%0d (M2)",
+env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0,
+env.bus_mon_agent.mon.n_hsplit_bit1_pulse - hs1_0), UVM_LOW)
+phase.drop_objection(this, "l3_split_or done");
+endtask
+endclass : ahb_l3_split_or_test
+class ahb_l3_both_masked_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_both_masked_test)
+function new(string name = "ahb_l3_both_masked_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_both_masked_vseq vseq;
+int unsigned hs0_0, hs1_0, m1ng_0, m2ng_0;
+phase.raise_objection(this, "l3_both_masked");
+phase.phase_done.set_drain_time(this, 200ns);
+`uvm_info("CFG", "l3_both_masked: M1 SPLIT@S1 + M2 SPLIT@S2 -> ca hai mask->hoi phuc",
+UVM_LOW)
+#100ns;
+hs0_0  = env.bus_mon_agent.mon.n_hsplit_bit0_pulse;
+hs1_0  = env.bus_mon_agent.mon.n_hsplit_bit1_pulse;
+m1ng_0 = env.m1_agent.mon.n_req_nogrant_cycles;
+m2ng_0 = env.m2_agent.mon.n_req_nogrant_cycles;
+vseq = ahb_l3_both_masked_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#100ns;
+if (env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0 == 0)
+`uvm_error("T3_10", "M1 khong duoc unmask (bit0 khong phat) — cond 2/3")
+if (env.bus_mon_agent.mon.n_hsplit_bit1_pulse - hs1_0 == 0)
+`uvm_error("T3_10", "M2 khong duoc unmask (bit1 khong phat) — cond 2/3")
+if (env.m1_agent.mon.n_req_nogrant_cycles - m1ng_0 == 0)
+`uvm_error("T3_10", "M1 khong bi chan — khong bi mask (cond 1)")
+if (env.m2_agent.mon.n_req_nogrant_cycles - m2ng_0 == 0)
+`uvm_error("T3_10", "M2 khong bi chan — khong bi mask (cond 1)")
+`uvm_info("T3_10",
+$sformatf("HSPLIT[0]=%0d HSPLIT[1]=%0d | M1 nogrant=%0d M2 nogrant=%0d",
+env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0,
+env.bus_mon_agent.mon.n_hsplit_bit1_pulse - hs1_0,
+env.m1_agent.mon.n_req_nogrant_cycles - m1ng_0,
+env.m2_agent.mon.n_req_nogrant_cycles - m2ng_0), UVM_LOW)
+phase.drop_objection(this, "l3_both_masked done");
+endtask
+endclass : ahb_l3_both_masked_test
+class ahb_l3_lock_over_split_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_lock_over_split_test)
+function new(string name = "ahb_l3_lock_over_split_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_lock_over_split_vseq vseq;
+int unsigned hs0_0, g2_0, m2ng_0;
+phase.raise_objection(this, "l3_lock_over_split");
+phase.phase_done.set_drain_time(this, 500ns);
+`uvm_info("CFG", "l3_lock_over_split: M1 locked + SPLIT(suppress) -> M2 cho lock", UVM_LOW)
+#200ns;
+hs0_0  = env.bus_mon_agent.mon.n_hsplit_bit0_pulse;
+g2_0   = env.bus_mon_agent.mon.n_grant_to_m2;
+m2ng_0 = env.m2_agent.mon.n_req_nogrant_cycles;
+vseq = ahb_l3_lock_over_split_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0 != 0)
+`uvm_error("T3_14",
+"Co xung HSPLIT[0] — M1 (locked) bi mask, SPLIT khong bi suppress (cond 1)")
+if (env.m2_agent.mon.n_req_nogrant_cycles - m2ng_0 == 0)
+`uvm_error("T3_14", "M2 khong he cho bus — khong tao tranh chap duoi lock (cond 2)")
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_14", "M2 khong duoc grant sau khi lock nha (cond 3)")
+`uvm_info("T3_14",
+$sformatf("HSPLIT[0]=%0d (ky vong 0), M2 cho=%0d, grant->M2=%0d",
+env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0,
+env.m2_agent.mon.n_req_nogrant_cycles - m2ng_0,
+env.bus_mon_agent.mon.n_grant_to_m2 - g2_0), UVM_LOW)
+phase.drop_objection(this, "l3_lock_over_split done");
+endtask
+endclass : ahb_l3_lock_over_split_test
+class ahb_l3_locked_split_hold_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_locked_split_hold_test)
+function new(string name = "ahb_l3_locked_split_hold_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_locked_split_hold_vseq vseq;
+int unsigned hs0_0;
+phase.raise_objection(this, "l3_locked_split_hold");
+phase.phase_done.set_drain_time(this, 500ns);
+`uvm_info("CFG", "l3_locked_split_hold: 1 master locked + SPLIT -> giu GNT_M1", UVM_LOW)
+#200ns;
+hs0_0 = env.bus_mon_agent.mon.n_hsplit_bit0_pulse;
+vseq = ahb_l3_locked_split_hold_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0 != 0)
+`uvm_error("T3_16",
+"Co xung HSPLIT[0] — M1 (locked) bi mask, SPLIT khong bi suppress (cond 2)")
+`uvm_info("T3_16",
+$sformatf("HSPLIT[0]=%0d (ky vong 0) — locked master giu GNT_M1, khong IDLE",
+env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0), UVM_LOW)
+phase.drop_objection(this, "l3_locked_split_hold done");
+endtask
+endclass : ahb_l3_locked_split_hold_test
+class ahb_l3_retry_rr_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_retry_rr_test)
+function new(string name = "ahb_l3_retry_rr_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_retry_rr_vseq vseq;
+int unsigned hs0_0, g2_0, g1_0;
+phase.raise_objection(this, "l3_retry_rr");
+phase.phase_done.set_drain_time(this, 500ns);
+`uvm_info("CFG", "l3_retry_rr: M1 RETRY (khong mask) + M2 xin -> round-robin xen ke",
+UVM_LOW)
+#200ns;
+hs0_0 = env.bus_mon_agent.mon.n_hsplit_bit0_pulse;
+g2_0  = env.bus_mon_agent.mon.n_grant_to_m2;
+g1_0  = env.bus_mon_agent.mon.n_grant_to_m1;
+vseq = ahb_l3_retry_rr_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#200ns;
+if (env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0 != 0)
+`uvm_error("T3_17",
+"Co xung HSPLIT[0] — RETRY bi hieu nham la SPLIT (mask) — cond 1")
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2_0 == 0)
+`uvm_error("T3_17", "M2 khong duoc grant — khong co xen ke (cond 2)")
+if (env.bus_mon_agent.mon.n_grant_to_m1 - g1_0 == 0)
+`uvm_error("T3_17", "Khong grant lai M1 — HMASTER khong quay ve 0 (cond 2)")
+`uvm_info("T3_17",
+$sformatf("HSPLIT[0]=%0d (ky vong 0), grant->M2=%0d, grant->M1=%0d",
+env.bus_mon_agent.mon.n_hsplit_bit0_pulse - hs0_0,
+env.bus_mon_agent.mon.n_grant_to_m2 - g2_0,
+env.bus_mon_agent.mon.n_grant_to_m1 - g1_0), UVM_LOW)
+phase.drop_objection(this, "l3_retry_rr done");
+endtask
+endclass : ahb_l3_retry_rr_test
+class ahb_l3_retry_vs_split_test extends ahb_base_test;
+`uvm_component_utils(ahb_l3_retry_vs_split_test)
+function new(string name = "ahb_l3_retry_vs_split_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_rvs_retry_vseq va;
+ahb_l3_rvs_split_vseq vb;
+int unsigned hs_sum_before, hs_sum_mid;
+int unsigned hs_bit_mid, hs_bit_after;
+int unsigned m_sel = 1;
+phase.raise_objection(this, "l3_retry_vs_split");
+phase.phase_done.set_drain_time(this, 500ns);
+void'($value$plusargs("MASTER=%d", m_sel));
+if (m_sel != 2) m_sel = 1;
+`uvm_info("CFG",
+$sformatf("l3_retry_vs_split: PhaA RETRY (0 mask) vs PhaB SPLIT (mask) MASTER=%0d",
+m_sel), UVM_LOW)
+#200ns;
+hs_sum_before = env.bus_mon_agent.mon.n_hsplit_bit0_pulse
++ env.bus_mon_agent.mon.n_hsplit_bit1_pulse;
+va = ahb_l3_rvs_retry_vseq::type_id::create("va");
+va.start(env.v_seqr);
+#100ns;
+hs_sum_mid = env.bus_mon_agent.mon.n_hsplit_bit0_pulse
++ env.bus_mon_agent.mon.n_hsplit_bit1_pulse;
+hs_bit_mid = (m_sel == 2) ? env.bus_mon_agent.mon.n_hsplit_bit1_pulse
+: env.bus_mon_agent.mon.n_hsplit_bit0_pulse;
+vb = ahb_l3_rvs_split_vseq::type_id::create("vb");
+vb.start(env.v_seqr);
+#200ns;
+hs_bit_after = (m_sel == 2) ? env.bus_mon_agent.mon.n_hsplit_bit1_pulse
+: env.bus_mon_agent.mon.n_hsplit_bit0_pulse;
+if (hs_sum_mid - hs_sum_before != 0)
+`uvm_error("T3_18",
+$sformatf("PhaA (RETRY) co xung HSPLIT[0/1]=%0d — RETRY dang bi mask sai (cond 1/3)",
+hs_sum_mid - hs_sum_before))
+if (hs_bit_after - hs_bit_mid == 0)
+`uvm_error("T3_18",
+$sformatf("PhaB (SPLIT) KHONG co xung HSPLIT[%0d] (M%0d) — master khong duoc mask/unmask (cond 2)",
+(m_sel == 2) ? 1 : 0, m_sel))
+`uvm_info("T3_18",
+$sformatf("PhaA HSPLIT[0/1] delta=%0d (ky vong 0) | PhaB HSPLIT[%0d](M%0d) delta=%0d (ky vong >=1)",
+hs_sum_mid - hs_sum_before, (m_sel == 2) ? 1 : 0, m_sel,
+hs_bit_after - hs_bit_mid), UVM_LOW)
+phase.drop_objection(this, "l3_retry_vs_split done");
+endtask
+endclass : ahb_l3_retry_vs_split_test
+class ahb_chain_pipelined_test extends ahb_base_test;
+`uvm_component_utils(ahb_chain_pipelined_test)
+function new(string name = "ahb_chain_pipelined_test", uvm_component parent = null);
+super.new(name, parent);
+endfunction
+task run_phase(uvm_phase phase);
+ahb_l3_chain_pipelined_vseq vseq;
+int unsigned g2m_0;
+phase.raise_objection(this, "chain_pipelined");
+phase.phase_done.set_drain_time(this, 300ns);
+`uvm_info("CFG",
+"chain_pipelined: ghi pipeline lien tuc S1->S2->S3->Default, 0 chu ky idle",
+UVM_LOW)
+#100ns;
+g2m_0 = env.bus_mon_agent.mon.n_grant_to_m2;
+vseq = ahb_l3_chain_pipelined_vseq::type_id::create("vseq");
+vseq.start(env.v_seqr);
+#100ns;
+if (env.bus_mon_agent.mon.n_grant_to_m2 - g2m_0 != 0)
+`uvm_error("TC_CHAIN",
+"Grant chuyen sang M2 giua chuoi pipeline — M1 phai giu quyen bus xuyen suot")
+`uvm_info("TC_CHAIN",
+"Bonus pipeline test hoan tat — kiem tra chi tiet trong log vseq", UVM_LOW)
+phase.drop_objection(this, "chain_pipelined done");
+endtask
+endclass : ahb_chain_pipelined_test
